@@ -63,6 +63,11 @@ p { line-height: 1.8; }
 .source-footnotes h3 { font-size: 13px; color: #444c55; font-weight: 600; margin-bottom: 8px; }
 .source-footnotes p { line-height: 1.9; margin-bottom: 5px; }
 .source-footnotes button { font-size: 12px; text-align: left; }
+.original-toggle { margin: 0 0 18px; font-size: 13px; color: var(--accent); }
+.original-quotes { margin: 12px 0; font-size: 13px; color: var(--muted); }
+.original-quotes summary,.source-footnotes summary { cursor: pointer; color: var(--accent); }
+.original-quotes blockquote { margin: 12px 0 6px; padding-left: 14px; border-left: 2px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; }
+.original-quotes button { font-size: 12px; }
 .document-footer { position: sticky; bottom: 0; z-index: 1; background: #fcfcfb; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; padding: 20px 0 25px; border-top: 1px solid var(--line); }
 .save-note { font-size: 12px; color: var(--muted); }
 .document-footer .primary { font-size: 13px; padding: 11px 16px; }

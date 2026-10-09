@@ -249,7 +249,8 @@ def test_actual_failed_responses_receive_specific_field_and_allowed_seed_feedbac
     assert fields and seed_errors
 
 
-def test_consolidation_shards_compare_all_topics_and_preserve_original_definitions():
+@pytest.mark.parametrize('omit_once',[False,True])
+def test_consolidation_shards_compare_all_topics_and_preserve_original_definitions(omit_once):
     """Identity-only transport stub tests accounting, not fabricated semantic decisions."""
     from pagggle.skill_strategy import Topic, consolidate_topics
     with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
@@ -261,17 +262,22 @@ def test_consolidation_shards_compare_all_topics_and_preserve_original_definitio
     settings=load_settings().model_copy(update={'model_max_tokens':1088})
     comparisons=[]
     class IdentityTransport:
+        omitted=False
         def call(self,stage,payload,schema,instruction,validate):
             assert len(json.dumps(payload,ensure_ascii=False))<=settings.model_input_chars
             items=payload['items']+payload.get('incoming',[])
             assert len(items)<=2
             comparisons.append([g['question'] for g in items])
-            value=schema.model_validate({'topics':[{'representative':g['i'],'groups':[g['i']]} for g in items]})
+            returned=items
+            if omit_once and len(items)>1 and not self.omitted:
+                self.omitted=True
+                returned=items[:-1]
+            value=schema.model_validate({'topics':[{'representative':g['i'],'groups':[g['i']]} for g in returned]})
             validate(value)
             return value.model_dump()
     merged=consolidate_topics(pending,context['business'],IdentityTransport(),settings,lambda _:None)
     assert merged==pending
-    assert len([c for c in comparisons if len(c)==2])==len(pending)*(len(pending)-1)//2
+    assert len([c for c in comparisons if len(c)==2])==len(pending)*(len(pending)-1)//2+int(omit_once)
 
 
 def test_actual_looping_response_retries_original_input_without_appending_truncated_output(monkeypatch):
@@ -377,3 +383,36 @@ def test_saved_failed_merge_can_be_revalidated_without_network_or_rewriting_hist
         original=db.execute('SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND request_hash=?',
             (PID,'bc57bcc8fb804cf8a9899325a94e2b28',record['request_hash'])).fetchone()
     assert original['payload']==row['payload']
+
+
+def test_stricter_repair_rejects_cached_output_and_requests_correction(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from pagggle.skill_strategy import Merges
+    @contextmanager
+    def connect():
+        with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+            db.row_factory=sqlite3.Row
+            yield db
+    with connect() as db:
+        row=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND stage='topic_consolidation' AND json_extract(payload,'$.status')='succeeded' LIMIT 1",(PID,)).fetchone()
+    if not row:pytest.skip('Requires a real saved consolidation response')
+    record=json.loads(row['payload']);requests=[];saved=[]
+    context=json.loads(record['request']['messages'][1]['content'])
+    instruction=record['request']['messages'][0]['content'].split('\n\n当前阶段：',1)[1].split('\nJSON schema：',1)[0]
+    class Offline:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def post(self,url,**kwargs):
+            requests.append(kwargs['json'])
+            raise httpx.ConnectError('offline verification')
+    def stricter(value):raise ValueError('This saved result does not meet the stricter repair requirement')
+    monkeypatch.setattr('pagggle.skill_execution.httpx.Client',Offline)
+    settings=load_settings()
+    engine=SkillExecution(SimpleNamespace(connect=connect),PID,'offline',settings,load_skills(settings),lambda _:None)
+    monkeypatch.setattr(engine,'save',lambda key,stage,payload:saved.append(payload))
+    with pytest.raises(ValueError,match='未回退规则'):
+        engine.call('topic_consolidation',context,Merges,instruction,stricter)
+    assert len(requests)==1 and saved[0]['status']=='failed'
+    assert json.loads(requests[0]['messages'][1]['content'])==context

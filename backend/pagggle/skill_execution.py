@@ -71,11 +71,15 @@ class SkillExecution:
         if cached:
             record = json.loads(cached['payload'])
             if record['status']=='succeeded':
-                parsed = schema.model_validate(record['output'])
-                validate(parsed)
-                record = {**record,'cached_from':cached['run_id']}
-                self.save(key, stage, record)
-                return parsed.model_dump()
+                try:
+                    parsed = schema.model_validate(record['output'])
+                    validate(parsed)
+                except ValueError:
+                    pass  # A stricter repair must request a correction, not reuse a partial answer.
+                else:
+                    record = {**record,'cached_from':cached['run_id']}
+                    self.save(key, stage, record)
+                    return parsed.model_dump()
         # Revalidate real saved responses after a validator fix, preserving the original failure.
         with self.store.connect() as db:
             failed=db.execute("SELECT run_id,payload FROM content_skill_calls WHERE project_id=? AND request_hash=? AND json_extract(payload,'$.status')='failed' ORDER BY created_at DESC LIMIT 1",(self.project_id,key)).fetchone()

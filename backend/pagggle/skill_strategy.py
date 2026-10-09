@@ -282,9 +282,11 @@ def business(snapshot):
             'unknown':'没有客户访谈、转化/排名效果、资源预算或实时 SERP 数据，不能编造这些依据'}
 
 
-def validate_merges(value, ids):
+def validate_merges(value, ids, require_complete=True):
     # Overlapping equivalence proposals are combined transitively; final members remain unique.
-    complete(sorted({i for t in value.topics for i in t.groups}),ids)
+    actual={i for t in value.topics for i in t.groups}
+    if require_complete or actual-ids:
+        complete(sorted(actual),ids)
     if any(t.representative not in t.groups for t in value.topics):
         raise ValueError('representative 必须是该组 groups 中的一个输入编号')
 
@@ -315,7 +317,7 @@ def consolidate_topics(pending, context, execution, settings, checkpoint):
     limit=max(2,(settings.model_max_tokens-1024)//32)
     def definitions(groups):
         return [{'i':i,**{k:g[k] for k in Topic.model_fields}} for i,g in enumerate(groups)]
-    def merge_request(payload):
+    def merge_request(payload, repair=False):
         ids={g['i'] for g in payload['items']+payload.get('incoming',[])}
         original_ids=sorted(ids)
         remapped=original_ids!=list(range(min(ids),max(ids)+1))
@@ -325,12 +327,24 @@ def consolidate_topics(pending, context, execution, settings, checkpoint):
                 for key in ('items','incoming') if key in payload}}
             ids=set(range(len(original_ids)))
         def validate(value):
-            validate_merges(value,ids)
+            validate_merges(value,ids,require_complete=repair)
         output=execution.call('topic_consolidation',payload,Merges,
             '合并跨批次的同义/近义主题，使一项客户任务对应一个主题。items 和 incoming 都是待比较的主题；'
             '区分相同任务的不同措辞与需要不同答案的任务。不要因为产品相同就合并安全、采购、比较等不同问题，'
             '也不要按单复数、营销修饰拆页。所有输入 i 恰好出现在一个 groups 中；representative 选该组中最能表达共同任务的原主题编号。'
             '只输出编号，系统保留所选代表主题的原始定义和全部成员。这是语义主题合并，不是 SERP 同页验证。',validate)
+        covered={i for t in output['topics'] for i in t['groups']}
+        if ids-covered:
+            entries=payload['items']+payload.get('incoming',[])
+            # Each omitted topic is explicitly compared against every other topic in small requests.
+            for missing in sorted(ids-covered):
+                target=next(g for g in entries if g['i']==missing)
+                base={'business':payload['business'],'incoming':[target]}
+                batches=pack([g for g in entries if g['i']!=missing],settings.model_input_chars,base,min(32,limit//2))
+                for batch in batches:
+                    corrected=merge_request({**base,'items':batch},repair=True)
+                    output={'topics':output['topics']+corrected['topics']}
+            validate_merges(Merges.model_validate(output),ids)
         if remapped:
             output={'topics':[{'representative':original_ids[t['representative']],
                 'groups':[original_ids[i] for i in t['groups']]} for t in output['topics']]}

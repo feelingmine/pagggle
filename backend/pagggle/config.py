@@ -31,6 +31,8 @@ class Settings(BaseModel):
     crawl_dns: Literal["system", "cloudflare"] = "system"
     crawl_backend: Literal["direct", "firecrawl"] = "direct"
     firecrawl_api_key: SecretStr = SecretStr("")
+    dataforseo_login: SecretStr = SecretStr("")
+    dataforseo_password: SecretStr = SecretStr("")
     scrape_timeout_seconds: int = Field(default=60, ge=10, le=180)
     request_timeout_seconds: int = Field(default=30, ge=1, le=120)
     model_timeout_seconds: int = Field(default=120, ge=1, le=300)

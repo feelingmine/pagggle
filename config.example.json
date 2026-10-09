@@ -9,6 +9,8 @@
   "crawl_dns": "system",
   "crawl_backend": "direct",
   "firecrawl_api_key": "",
+  "dataforseo_login": "",
+  "dataforseo_password": "",
   "scrape_timeout_seconds": 60,
   "request_timeout_seconds": 30,
   "model_timeout_seconds": 120,

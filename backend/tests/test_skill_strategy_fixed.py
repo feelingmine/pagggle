@@ -247,3 +247,28 @@ def test_actual_failed_responses_receive_specific_field_and_allowed_seed_feedbac
                     assert all(seed in validation_feedback(error.value) for seed in seeds)
                     seed_errors+=1
     assert fields and seed_errors
+
+
+def test_consolidation_shards_compare_all_topics_and_preserve_original_definitions():
+    """Identity-only transport stub tests accounting, not fabricated semantic decisions."""
+    from pagggle.skill_strategy import Topic, consolidate_topics
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        row=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND stage='topic_consolidation' LIMIT 1",
+            (PID,'80e85da161e74f6e8996c8e6d47dcd73')).fetchone()
+    if not row:pytest.skip('Requires actual consolidation request that exceeded output budget')
+    context=json.loads(json.loads(row[0])['request']['messages'][1]['content'])
+    pending=[{**{k:g[k] for k in Topic.model_fields},'members':[g['i']]} for g in context['items'][:5]]
+    settings=load_settings().model_copy(update={'model_max_tokens':1088})
+    comparisons=[]
+    class IdentityTransport:
+        def call(self,stage,payload,schema,instruction,validate):
+            assert len(json.dumps(payload,ensure_ascii=False))<=settings.model_input_chars
+            items=payload['items']+payload.get('incoming',[])
+            assert len(items)<=2
+            comparisons.append([g['question'] for g in items])
+            value=schema.model_validate({'topics':[{'representative':g['i'],'groups':[g['i']]} for g in items]})
+            validate(value)
+            return value.model_dump()
+    merged=consolidate_topics(pending,context['business'],IdentityTransport(),settings,lambda _:None)
+    assert merged==pending
+    assert len([c for c in comparisons if len(c)==2])==len(pending)*(len(pending)-1)//2

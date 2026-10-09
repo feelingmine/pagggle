@@ -69,7 +69,8 @@ class Assignments(Strict):
     deferred: list[Deferred]
 
 
-class Merged(Topic):
+class Merged(Strict):
+    representative: int
     groups: list[int] = Field(min_length=1)
 
 
@@ -281,6 +282,65 @@ def business(snapshot):
             'unknown':'没有客户访谈、转化/排名效果、资源预算或实时 SERP 数据，不能编造这些依据'}
 
 
+def consolidate_topics(pending, context, execution, settings, checkpoint):
+    """Compare each new batch against every catalog shard; never grow an unbounded prompt."""
+    limit=max(2,(settings.model_max_tokens-1024)//32)
+    def definitions(groups):
+        return [{'i':i,**{k:g[k] for k in Topic.model_fields}} for i,g in enumerate(groups)]
+    def merge_request(payload):
+        ids={g['i'] for g in payload['items']+payload.get('incoming',[])}
+        def validate(value):
+            complete([i for t in value.topics for i in t.groups],ids)
+            if any(t.representative not in t.groups for t in value.topics):
+                raise ValueError('representative 必须是该组 groups 中的一个输入编号')
+        return execution.call('topic_consolidation',payload,Merges,
+            '合并跨批次的同义/近义主题，使一项客户任务对应一个主题。items 和 incoming 都是待比较的主题；'
+            '区分相同任务的不同措辞与需要不同答案的任务。不要因为产品相同就合并安全、采购、比较等不同问题，'
+            '也不要按单复数、营销修饰拆页。所有输入 i 恰好出现在一个 groups 中；representative 选该组中最能表达共同任务的原主题编号。'
+            '只输出编号，系统保留所选代表主题的原始定义和全部成员。这是语义主题合并，不是 SERP 同页验证。',validate)
+    def combine(groups,outputs):
+        parents=list(range(len(groups)))
+        def root(i):
+            while parents[i]!=i:
+                parents[i]=parents[parents[i]]
+                i=parents[i]
+            return i
+        for output in outputs:
+            for topic in output['topics']:
+                representative=root(topic['representative'])
+                for i in topic['groups']:
+                    parents[root(i)]=representative
+        merged={}
+        for i,g in enumerate(groups):
+            representative=root(i)
+            if representative not in merged:
+                merged[representative]={**groups[representative],'members':[]}
+            merged[representative]['members']+=g['members']
+        return list(merged.values())
+    batches=pack(definitions(pending),settings.model_input_chars,{'business':context},limit//2)
+    proposals=parallel(batches,lambda batch:merge_request({'business':context,'items':batch}),
+        settings.strategy_concurrency,checkpoint,'3/5 skill 分片合并主题')
+    catalog=[]
+    for index,(batch,output) in enumerate(zip(batches,proposals),1):
+        # Local responses use original pending IDs; translate them before combining.
+        indices={g['i']:i for i,g in enumerate(batch)}
+        local={'topics':[{'representative':indices[t['representative']],
+                         'groups':[indices[i] for i in t['groups']]} for t in output['topics']]}
+        incoming=combine([pending[g['i']] for g in batch],[local])
+        if not catalog:
+            catalog=incoming
+            continue
+        groups=catalog+incoming
+        entries=definitions(groups)
+        base={'business':context,'incoming':entries[len(catalog):]}
+        shards=pack(entries[:len(catalog)],settings.model_input_chars,base,limit-len(incoming))
+        outputs=parallel(shards,lambda shard:merge_request({**base,'items':shard}),
+            settings.strategy_concurrency,checkpoint,f'3/5 skill 对齐主题目录 {index}/{len(batches)}')
+        catalog=combine(groups,outputs)
+    complete([i for g in catalog for i in g['members']],[i for g in pending for i in g['members']])
+    return catalog
+
+
 def execute_strategy(snapshot, execution, settings, checkpoint):
     """Every stage executes skills; only validation, transport and presentation are deterministic code."""
     context=business(snapshot)
@@ -396,28 +456,7 @@ def execute_strategy(snapshot, execution, settings, checkpoint):
     contexts=sorted({(g['market'],g['language']) for g in grouped.values()})
     for market,language in contexts:
         pending=[g for g in grouped.values() if (g['market'],g['language'])==(market,language)]
-        merged=[]
-        while pending:
-            batch=list(merged)
-            while pending:
-                item=pending[0]
-                definitions=[{'i':i,**{k:g[k] for k in Topic.model_fields}} for i,g in enumerate(batch+[item])]
-                if len(json.dumps({'business':context,'items':definitions},ensure_ascii=False))>settings.model_input_chars:
-                    break
-                batch.append(pending.pop(0))
-            if len(batch)==len(merged):
-                raise ValueError('动态主题目录超出单次合并输入预算；未丢弃主题，请增加 model_input_chars')
-            def validate_merge(value):
-                complete([i for t in value.topics for i in t.groups],range(len(batch)))
-                if any(t.seed not in seeds for t in value.topics):
-                    raise ValueError('合并主题的基础词无效')
-            output=execution.call('topic_consolidation',{'business':context,'items':[{'i':i,**{k:g[k] for k in Topic.model_fields}} for i,g in enumerate(batch)]},Merges,
-                '合并跨批次的同义/近义主题，使一项客户任务对应一个主题。区分相同任务的不同措辞与需要不同答案的任务。'
-                '不要因为产品相同就合并安全、采购、比较等不同问题；也不要按关键词的单复数、营销修饰拆页。'
-                '所有输入 i 恰好出现在一个 groups 中；输出自然且具体的主题和买家问题。此为语义主题，不能声称 SERP 已验证同页。',validate_merge)
-            merged=[{**{k:t[k] for k in Topic.model_fields},'market':market,'language':language,
-                     'members':[key for i in t['groups'] for key in batch[i]['members']]} for t in output['topics']]
-        topics += merged
+        topics += consolidate_topics(pending,context,execution,settings,checkpoint)
     by_key={r['id']:r for r in rows}
     for t in topics:
         t['members']=sorted(t['members'],key=lambda key:rank(by_key[key]))

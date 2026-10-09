@@ -189,7 +189,10 @@ td:first-child { min-width: 220px; }
 .seed-term > div { min-width: 0; }
 .seed-term p { color: var(--muted); font-size: 12px; margin: 5px 0 0; }
 .seed-word { text-align: left; overflow-wrap: anywhere; }
-.seed-term > button { flex-shrink: 0; font-size: 12px; }
+.seed-term-actions { display: flex; flex-shrink: 0; align-items: center; gap: 12px; }
+.seed-term-actions button { font-size: 12px; }
+.seed-edited { color: var(--accent); }
+.seed-version { max-width: 390px; }
 .cluster-toolbar { display: flex; align-items: center; gap: 28px; margin: 28px 0 12px; flex-wrap: wrap; }
 .cluster-toolbar .field { margin-bottom: 0; }
 .cluster-toolbar p,.cluster-method,.intake-schema { font-size: 14px; color: var(--muted); line-height: 1.8; }

@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import ROOT, load_settings
@@ -69,6 +69,14 @@ class IntakeInput(BaseModel):
 class KeywordCompletionInput(BaseModel):
     run_id: str = Field(min_length=1)
     selected_group_ids: list[str]
+
+
+class SeedKeywordEditInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    expected_revision: int = Field(ge=0, strict=True)
+    keyword: str = Field(min_length=1, max_length=120, pattern=r"^[^&/,\n\r]+$")
+    category: str = Field(min_length=1, max_length=80)
+    kind: Literal["product", "service"]
 
 
 def create_app(settings=None, store=None):
@@ -346,6 +354,10 @@ def create_app(settings=None, store=None):
     @app.post("/api/projects/{project_id}/keyword-onboarding/complete")
     def complete_keyword_onboarding(project_id: str, data: KeywordCompletionInput):
         return store.complete_keyword_onboarding(project_id, data.run_id, data.selected_group_ids)
+
+    @app.post("/api/projects/{project_id}/seed-keywords/{run_id}/terms/{index}")
+    def edit_seed_keyword(project_id: str, run_id: str, index: int, data: SeedKeywordEditInput):
+        return store.edit_seed_keyword(project_id, run_id, index, data.expected_revision, data.model_dump())
 
     @app.get("/")
     def home():

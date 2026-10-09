@@ -98,12 +98,18 @@ class Store:
                     payload TEXT NOT NULL, created_at TEXT NOT NULL,
                     UNIQUE(project_id, job_id)
                 );
+                CREATE TABLE IF NOT EXISTS seed_keyword_revisions (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    run_id TEXT NOT NULL REFERENCES seed_keyword_runs(id), revision INTEGER NOT NULL,
+                    payload TEXT NOT NULL, created_at TEXT NOT NULL,
+                    UNIQUE(project_id, run_id, revision)
+                );
             """)
             if "options" not in {r["name"] for r in db.execute("PRAGMA table_info(jobs)")}:
                 db.execute("ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
             if "analysis_job_id" not in {r["name"] for r in db.execute("PRAGMA table_info(profiles)")}:
                 db.execute("ALTER TABLE profiles ADD COLUMN analysis_job_id TEXT")
-            db.execute("PRAGMA user_version=7")
+            db.execute("PRAGMA user_version=8")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -148,6 +154,11 @@ class Store:
             runs = [{**dict(r), "usage": json.loads(r["usage"])} for r in db.execute("SELECT id,job_id,model,usage,created_at FROM model_runs WHERE project_id=? ORDER BY created_at DESC", (project_id,))]
             onboarding = db.execute("SELECT * FROM keyword_onboarding WHERE project_id=?", (project_id,)).fetchone()
             seeds = [{**dict(r), "payload": json.loads(r["payload"])} for r in db.execute("SELECT * FROM seed_keyword_runs WHERE project_id=? ORDER BY rowid DESC", (project_id,))]
+            for seed in seeds:
+                edit = db.execute("SELECT revision,payload,created_at FROM seed_keyword_revisions WHERE project_id=? AND run_id=? ORDER BY revision DESC LIMIT 1", (project_id, seed["id"])).fetchone()
+                seed.update(original_payload=seed["payload"], revision=edit["revision"] if edit else 0, updated_at=edit["created_at"] if edit else seed["created_at"])
+                if edit:
+                    seed["payload"] = json.loads(edit["payload"])
         return {"project": dict(project), "sources": sources, "profiles": profiles, "jobs": jobs, "model_runs": runs,
             "seed_keyword_runs": seeds,
             "keyword_onboarding": {**dict(onboarding), "selected_group_ids": json.loads(onboarding["selected_group_ids"])} if onboarding else None}
@@ -169,6 +180,38 @@ class Store:
             db.execute("INSERT INTO seed_keyword_runs VALUES (?,?,?,?,?,?)", (uid(), project_id, job_id, profile_version, encode(payload), now()))
             db.execute("INSERT INTO model_runs VALUES (?,?,?,?,?,?)", (uid(), project_id, job_id, model, encode(usage), now()))
             self.event(db, project_id, "seed_keywords_extracted", {"job_id": job_id, "profile_version": profile_version, "keywords": len(payload["keywords"])})
+
+    def edit_seed_keyword(self, project_id, run_id, index, expected_revision, changes):
+        from .seed_keywords import SeedKeywords, validate_seed_keywords
+
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            run = db.execute("SELECT * FROM seed_keyword_runs WHERE project_id=? AND id=?", (project_id, run_id)).fetchone()
+            if not run:
+                raise LookupError("基础词记录不存在")
+            profile = db.execute("SELECT version,payload FROM profiles WHERE project_id=? ORDER BY version DESC LIMIT 1", (project_id,)).fetchone()
+            newest = db.execute("SELECT id FROM seed_keyword_runs WHERE project_id=? AND profile_version=? ORDER BY rowid DESC LIMIT 1", (project_id, run["profile_version"])).fetchone()
+            if not profile or profile["version"] != run["profile_version"] or newest["id"] != run_id:
+                raise ValueError("正在编辑的基础词已不是当前版本，请刷新后再修改")
+            if db.execute("SELECT 1 FROM jobs WHERE project_id=? AND status IN ('queued','running')", (project_id,)).fetchone():
+                raise ValueError("请等待当前任务完成后再编辑基础词")
+            edit = db.execute("SELECT revision,payload FROM seed_keyword_revisions WHERE project_id=? AND run_id=? ORDER BY revision DESC LIMIT 1", (project_id, run_id)).fetchone()
+            revision = edit["revision"] if edit else 0
+            if revision != expected_revision:
+                raise ValueError("基础词已被修改，请刷新后再编辑；本次输入未覆盖新版本")
+            payload = json.loads(edit["payload"] if edit else run["payload"])
+            if index < 0 or index >= len(payload["keywords"]):
+                raise LookupError("基础词不存在")
+            original = payload["keywords"][index]
+            updated = {**original, **{key: changes[key] for key in ("keyword", "category", "kind")}}
+            payload["keywords"][index] = updated
+            validate_seed_keywords(SeedKeywords.model_validate(payload), {"payload": json.loads(profile["payload"])})
+            if updated == original:
+                return {"revision": revision, "changed": False}
+            revision += 1
+            db.execute("INSERT INTO seed_keyword_revisions VALUES (?,?,?,?,?,?)", (uid(), project_id, run_id, revision, encode(payload), now()))
+            self.event(db, project_id, "seed_keyword_edited", {"run_id": run_id, "revision": revision, "keyword_index": index})
+            return {"revision": revision, "changed": True}
 
     def sources(self, project_id):
         self.project(project_id)

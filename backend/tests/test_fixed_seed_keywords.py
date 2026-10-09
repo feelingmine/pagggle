@@ -135,3 +135,72 @@ def test_quality_repair_is_bounded_using_prior_actual_output(fixed, monkeypatch,
         actual, usage = generate_seed_keywords(load_settings(), profile, sources, project["site_url"])
         assert actual == payload and usage["attempts"] == 2
     assert len(calls) == 2
+
+
+def test_edit_seed_persists_without_changing_original_or_other_data(fixed):
+    store, project, profile, _, payload = fixed
+    before = store.snapshot(project["id"])
+    run = before["seed_keyword_runs"][0]
+    term = payload["keywords"][0]
+    changes = {key: term[key] for key in ("keyword", "category", "kind")}
+    demands, clusters = store.demands(project["id"]), store.cluster_runs(project["id"])
+    with TestClient(create_app(load_settings(), store)) as client:
+        route = f"/api/projects/{project['id']}/seed-keywords/{run['id']}/terms/0"
+        unchanged = client.post(route, json={"expected_revision": run["revision"], **changes})
+        assert unchanged.status_code == 200 and not unchanged.json()["changed"]
+        # Case-only edit of the real word, in a private database copy; no invented term.
+        changes["keyword"] = term["keyword"].swapcase()
+        saved = client.post(route, json={"expected_revision": run["revision"], **changes})
+        assert saved.status_code == 200 and saved.json()["changed"]
+        assert saved.json()["revision"] == run["revision"] + 1
+        assert client.post(route, json={"expected_revision": run["revision"], **changes}).status_code == 409
+    after = Store(store.path).snapshot(project["id"])
+    current = after["seed_keyword_runs"][0]
+    assert current["original_payload"] == run["original_payload"]
+    assert current["payload"]["keywords"][0] == {**term, **changes}
+    assert current["payload"]["keywords"][1:] == payload["keywords"][1:]
+    for key in ("sources", "profiles", "keyword_onboarding", "jobs", "model_runs"):
+        assert after[key] == before[key]
+    assert store.demands(project["id"]) == demands and store.cluster_runs(project["id"]) == clusters
+    with store.connect() as db:
+        original = json.loads(db.execute("SELECT payload FROM seed_keyword_runs WHERE project_id=? AND id=?", (project["id"], run["id"])).fetchone()[0])
+    assert original == run["original_payload"]
+
+
+def test_edit_seed_rejects_duplicates_invalid_scope_and_old_results(fixed):
+    store, project, profile, _, payload = fixed
+    before = store.snapshot(project["id"])
+    run = before["seed_keyword_runs"][0]
+    term = payload["keywords"][0]
+    request = {"expected_revision": run["revision"], **{k: term[k] for k in ("keyword", "category", "kind")}}
+    with TestClient(create_app(load_settings(), store)) as client:
+        route = f"/api/projects/{project['id']}/seed-keywords/{run['id']}/terms/0"
+        assert client.post(route, json={**request, "keyword": payload["keywords"][1]["keyword"]}).status_code == 409
+        assert client.post(route, json={**request, "keyword": " "}).status_code == 422
+        assert client.post(route, json={**request, "fact_indices": term["fact_indices"]}).status_code == 422
+        assert client.post(f"/api/projects/missing/seed-keywords/{run['id']}/terms/0", json=request).status_code == 404
+        assert client.post(route.replace("/terms/0", f"/terms/{len(payload['keywords'])}"), json=request).status_code == 404
+        old = before["seed_keyword_runs"][1]
+        assert client.post(route.replace(run["id"], old["id"]), json=request).status_code == 409
+        job = store.create_job(project["id"], "seed_keywords", {"profile_version": profile["version"]})
+        assert client.post(route, json=request).status_code == 409
+        store.update_job(project["id"], job, status="cancelled")
+        store.save_profile(project["id"], profile["payload"], profile["reason"], profile["version"])
+        assert client.post(route, json=request).status_code == 409
+    assert store.snapshot(project["id"])["seed_keyword_runs"] == before["seed_keyword_runs"]
+
+
+def test_manual_seed_revision_survives_a_new_extraction(fixed):
+    store, project, profile, _, payload = fixed
+    run = store.snapshot(project["id"])["seed_keyword_runs"][0]
+    changes = {key: payload["keywords"][0][key] for key in ("keyword", "category", "kind")}
+    changes["keyword"] = changes["keyword"].swapcase()
+    store.edit_seed_keyword(project["id"], run["id"], 0, run["revision"], changes)
+    revised = store.snapshot(project["id"])["seed_keyword_runs"][0]
+    job = store.create_job(project["id"], "seed_keywords", {"profile_version": profile["version"]})
+    store.update_job(project["id"], job, status="running")
+    store.save_seed_keywords(project["id"], job, profile["version"], payload, load_settings().model, {})
+    store.update_job(project["id"], job, status="succeeded")
+    runs = store.snapshot(project["id"])["seed_keyword_runs"]
+    assert runs[0]["payload"] == payload and runs[0]["revision"] == 0
+    assert next(r for r in runs if r["id"] == revised["id"]) == revised

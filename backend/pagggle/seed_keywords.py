@@ -38,7 +38,7 @@ def validate_seed_keywords(payload, profile):
             raise ValueError("基础词依据必须属于本版已有的产品或服务主张")
         key = " ".join(term.keyword.casefold().split())
         if key in seen:
-            raise ValueError("基础词重复，请重新提取")
+            raise ValueError("基础词重复，请调整关键词")
         if " and " in f" {key} ":
             raise ValueError(f"基础词「{term.keyword}」包含并列类别，须拆分或概括为单个自然的行业类别")
         seen.add(key)

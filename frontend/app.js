@@ -190,7 +190,10 @@ function clusterCoversAll(run){
 }
 function filteredGroups(){
   const query=state.clusterQuery.trim().toLocaleLowerCase();
-  return (clusterRun()?.payload.groups||[]).filter(g=>(!query||g.members.some(m=>m.keyword.toLocaleLowerCase().includes(query)))&&(!state.clusterStatus||g.status===state.clusterStatus));
+  return (clusterRun()?.payload.groups||[]).filter(g=>(!query||g.members.some(m=>m.keyword.toLocaleLowerCase().includes(query)))&&(!state.clusterStatus||g.status===state.clusterStatus)).sort((a,b)=>{
+    const x=a.members[0],y=b.members[0];
+    return (x.volume==null)-(y.volume==null)||(y.volume??0)-(x.volume??0)||(x.kd==null)-(y.kd==null)||(x.kd??0)-(y.kd??0);
+  });
 }
 function renderClusters(){
   const first=initialKeywordJourney(),eligible=eligibleKeywords(),run=clusterRun(),data=run?.payload,settings=state.clusterData?.settings,covered=clusterCoversAll(run);
@@ -207,7 +210,7 @@ function renderClusters(){
 }
 function renderClusterRows(){
   const run=clusterRun(),groups=filteredGroups(),silos=[...new Set(run.payload.groups.map(g=>g.semantic_silo_id))],first=initialKeywordJourney();
-  $("#cluster-filter-count").textContent=`显示 ${groups.length} / ${run.payload.groups.length} 个候选组；筛选只影响展示。`;
+  $("#cluster-filter-count").textContent=`显示 ${groups.length} / ${run.payload.groups.length} 个候选组；按主词搜索量从高到低，同搜索量按 KD 从低到高，缺失指标排后。`;
   $("#cluster-results").innerHTML=groups.length?`<div class="table-scroll cluster-table"><table><thead><tr>${first?"<th>保留</th>":""}<th>候选主关键词</th><th>语义主题</th><th>成员</th><th>主词搜索量 / KD</th><th>需要核对</th></tr></thead><tbody>${groups.map(g=>{const primary=g.members[0];return `<tr>${first?`<td data-label="保留"><input type="checkbox" data-group-id="${g.target_page_id}" aria-label="保留候选组 ${esc(primary.keyword)}" ${state.selectedGroupIds.has(g.target_page_id)?"checked":""}></td>`:""}<td data-label="候选主关键词"><button class="text-button accent-link" data-action="show-cluster" data-id="${g.target_page_id}">${esc(primary.keyword)}</button>${state.data.keyword_onboarding?.run_id===run.id&&state.data.keyword_onboarding.selected_group_ids.includes(g.target_page_id)?'<span class="saved-selection">已保留</span>':""}</td><td data-label="语义主题">主题 ${silos.indexOf(g.semantic_silo_id)+1}</td><td data-label="成员">${g.members.length} 词</td><td data-label="主词搜索量 / KD">${primary.volume??"未知"} / ${primary.kd??"未知"}</td><td data-label="需要核对">${badge(g.status,g.basis==="semantic_only"?"同页关系待验证":g.status==="needs_evidence"?"待补证据":"待审核")}${g.chain_overlap?'<div class="inline-error">存在链式关联</div>':""}${g.primary_provisional?'<div class="form-help">主词排序待补指标</div>':""}</td></tr>`;}).join("")}</tbody></table></div>`:'<div class="empty-state"><h2>没有符合筛选条件的候选组</h2><p>已有选择仍保留，调整检索词或状态即可继续。</p></div>';
   $("#cluster-results").onchange=event=>{const id=event.target.dataset.groupId;if(!id)return;event.target.checked?state.selectedGroupIds.add(id):state.selectedGroupIds.delete(id);if(state.selectedGroupIds.size)state.skipGroups=false;updateGroupSelection();};
   updateGroupSelection();

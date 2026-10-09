@@ -309,3 +309,71 @@ def test_actual_looping_response_retries_original_input_without_appending_trunca
     assert all(json.loads(r['messages'][1]['content'])==context for r in requests)
     assert all(len(r['messages'])==3 for r in requests[1:])
     assert all(attempt['content'] not in m['content'] for r in requests for m in r['messages'])
+
+
+def test_actual_overlapping_merge_proposals_produce_unique_complete_members():
+    from pagggle.skill_strategy import Merges, Topic, merge_topic_groups, validate_merges
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        rows=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND stage='topic_consolidation' AND json_extract(payload,'$.status')='failed'",
+            (PID,'bc57bcc8fb804cf8a9899325a94e2b28')).fetchall()
+    if not rows:pytest.skip('Requires actual overlapping merge responses')
+    accepted=0
+    for row in rows:
+        record=json.loads(row[0]);context=json.loads(record['request']['messages'][1]['content'])
+        items=context['items']+context.get('incoming',[]);ids={g['i'] for g in items}
+        value=Merges.model_validate_json(record['attempts'][-1]['content'])
+        output_ids={i for t in value.topics for i in t.groups}
+        if output_ids!=ids:
+            with pytest.raises(ValueError):validate_merges(value,ids)
+            continue
+        validate_merges(value,ids)
+        accepted+=1
+        assert sum(len(t.groups) for t in value.topics)>len(ids)
+        indices={g['i']:i for i,g in enumerate(items)}
+        outputs={'topics':[{'representative':indices[t.representative],'groups':[indices[i] for i in t.groups]} for t in value.topics]}
+        groups=[{**{k:g[k] for k in Topic.model_fields},'members':[g['i']]} for g in items]
+        merged=merge_topic_groups(groups,[outputs])
+        complete([i for g in merged for i in g['members']],ids)
+        assert all({k:g[k] for k in Topic.model_fields} in [{k:t[k] for k in Topic.model_fields} for t in groups] for g in merged)
+        with pytest.raises(ValueError):validate_merges(value,ids|{max(ids)+1})
+        with pytest.raises(ValueError):validate_merges(value,ids-{min(ids)})
+    assert accepted>0
+
+
+def test_saved_failed_merge_can_be_revalidated_without_network_or_rewriting_history(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from pagggle.skill_strategy import Merges, validate_merges
+    @contextmanager
+    def connect():
+        with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+            db.row_factory=sqlite3.Row
+            yield db
+    with connect() as db:
+        rows=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND stage='topic_consolidation' AND json_extract(payload,'$.status')='failed'",
+            (PID,'bc57bcc8fb804cf8a9899325a94e2b28')).fetchall()
+    row=None
+    for candidate in rows:
+        record=json.loads(candidate['payload']);context=json.loads(record['request']['messages'][1]['content'])
+        ids={g['i'] for g in context['items']+context.get('incoming',[])}
+        try:validate_merges(Merges.model_validate_json(record['attempts'][-1]['content']),ids)
+        except ValueError:continue
+        row=candidate
+        break
+    if not row:pytest.skip('Requires actual overlapping merge response with no missing/unknown IDs')
+    record=json.loads(row['payload']);saved=[]
+    context=json.loads(record['request']['messages'][1]['content'])
+    instruction=record['request']['messages'][0]['content'].split('\n\n当前阶段：',1)[1].split('\nJSON schema：',1)[0]
+    ids={g['i'] for g in context['items']+context.get('incoming',[])}
+    def forbidden(*args,**kwargs):pytest.fail('Saved valid response must not trigger another model request')
+    monkeypatch.setattr('pagggle.skill_execution.httpx.Client',forbidden)
+    settings=load_settings()
+    engine=SkillExecution(SimpleNamespace(connect=connect),PID,'offline',settings,load_skills(settings),lambda _:None)
+    monkeypatch.setattr(engine,'save',lambda key,stage,payload:saved.append(payload))
+    output=engine.call('topic_consolidation',context,Merges,instruction,lambda value:validate_merges(value,ids))
+    validate_merges(Merges.model_validate(output),ids)
+    assert saved[0]['status']=='succeeded' and saved[0]['revalidated_from']
+    with connect() as db:
+        original=db.execute('SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND request_hash=?',
+            (PID,'bc57bcc8fb804cf8a9899325a94e2b28',record['request_hash'])).fetchone()
+    assert original['payload']==row['payload']

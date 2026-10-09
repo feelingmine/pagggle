@@ -76,6 +76,23 @@ class SkillExecution:
                 record = {**record,'cached_from':cached['run_id']}
                 self.save(key, stage, record)
                 return parsed.model_dump()
+        # Revalidate real saved responses after a validator fix, preserving the original failure.
+        with self.store.connect() as db:
+            failed=db.execute("SELECT run_id,payload FROM content_skill_calls WHERE project_id=? AND request_hash=? AND json_extract(payload,'$.status')='failed' ORDER BY created_at DESC LIMIT 1",(self.project_id,key)).fetchone()
+        if failed:
+            previous=json.loads(failed['payload'])
+            for attempt in reversed(previous.get('attempts',[])):
+                if attempt.get('finish_reason')=='length':
+                    continue
+                try:
+                    parsed=schema.model_validate_json(attempt['content'])
+                    validate(parsed)
+                except ValueError:
+                    continue
+                self.checkpoint(None)
+                self.save(key,stage,{**previous,'status':'succeeded','output':parsed.model_dump(),
+                    'cached_from':failed['run_id'],'revalidated_from':failed['run_id']})
+                return parsed.model_dump()
         if stage=='keyword_assignment':
             with self.store.connect() as db:
                 oversized=db.execute("SELECT run_id,payload FROM content_skill_calls WHERE project_id=? AND request_hash=? AND json_extract(payload,'$.status')='failed' ORDER BY created_at DESC LIMIT 1",(self.project_id,key)).fetchone()

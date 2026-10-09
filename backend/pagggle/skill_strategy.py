@@ -282,6 +282,34 @@ def business(snapshot):
             'unknown':'没有客户访谈、转化/排名效果、资源预算或实时 SERP 数据，不能编造这些依据'}
 
 
+def validate_merges(value, ids):
+    # Overlapping equivalence proposals are combined transitively; final members remain unique.
+    complete(sorted({i for t in value.topics for i in t.groups}),ids)
+    if any(t.representative not in t.groups for t in value.topics):
+        raise ValueError('representative 必须是该组 groups 中的一个输入编号')
+
+
+def merge_topic_groups(groups,outputs):
+    parents=list(range(len(groups)))
+    def root(i):
+        while parents[i]!=i:
+            parents[i]=parents[parents[i]]
+            i=parents[i]
+        return i
+    for output in outputs:
+        for topic in output['topics']:
+            representative=root(topic['representative'])
+            for i in topic['groups']:
+                parents[root(i)]=representative
+    merged={}
+    for i,g in enumerate(groups):
+        representative=root(i)
+        if representative not in merged:
+            merged[representative]={**groups[representative],'members':[]}
+        merged[representative]['members']+=g['members']
+    return list(merged.values())
+
+
 def consolidate_topics(pending, context, execution, settings, checkpoint):
     """Compare each new batch against every catalog shard; never grow an unbounded prompt."""
     limit=max(2,(settings.model_max_tokens-1024)//32)
@@ -289,34 +317,24 @@ def consolidate_topics(pending, context, execution, settings, checkpoint):
         return [{'i':i,**{k:g[k] for k in Topic.model_fields}} for i,g in enumerate(groups)]
     def merge_request(payload):
         ids={g['i'] for g in payload['items']+payload.get('incoming',[])}
+        original_ids=sorted(ids)
+        remapped=original_ids!=list(range(min(ids),max(ids)+1))
+        if remapped:
+            local_ids={i:index for index,i in enumerate(original_ids)}
+            payload={**payload,**{key:[{**g,'i':local_ids[g['i']]} for g in payload[key]]
+                for key in ('items','incoming') if key in payload}}
+            ids=set(range(len(original_ids)))
         def validate(value):
-            complete([i for t in value.topics for i in t.groups],ids)
-            if any(t.representative not in t.groups for t in value.topics):
-                raise ValueError('representative 必须是该组 groups 中的一个输入编号')
-        return execution.call('topic_consolidation',payload,Merges,
+            validate_merges(value,ids)
+        output=execution.call('topic_consolidation',payload,Merges,
             '合并跨批次的同义/近义主题，使一项客户任务对应一个主题。items 和 incoming 都是待比较的主题；'
             '区分相同任务的不同措辞与需要不同答案的任务。不要因为产品相同就合并安全、采购、比较等不同问题，'
             '也不要按单复数、营销修饰拆页。所有输入 i 恰好出现在一个 groups 中；representative 选该组中最能表达共同任务的原主题编号。'
             '只输出编号，系统保留所选代表主题的原始定义和全部成员。这是语义主题合并，不是 SERP 同页验证。',validate)
-    def combine(groups,outputs):
-        parents=list(range(len(groups)))
-        def root(i):
-            while parents[i]!=i:
-                parents[i]=parents[parents[i]]
-                i=parents[i]
-            return i
-        for output in outputs:
-            for topic in output['topics']:
-                representative=root(topic['representative'])
-                for i in topic['groups']:
-                    parents[root(i)]=representative
-        merged={}
-        for i,g in enumerate(groups):
-            representative=root(i)
-            if representative not in merged:
-                merged[representative]={**groups[representative],'members':[]}
-            merged[representative]['members']+=g['members']
-        return list(merged.values())
+        if remapped:
+            output={'topics':[{'representative':original_ids[t['representative']],
+                'groups':[original_ids[i] for i in t['groups']]} for t in output['topics']]}
+        return output
     batches=pack(definitions(pending),settings.model_input_chars,{'business':context},limit//2)
     proposals=parallel(batches,lambda batch:merge_request({'business':context,'items':batch}),
         settings.strategy_concurrency,checkpoint,'3/5 skill 分片合并主题')
@@ -326,7 +344,7 @@ def consolidate_topics(pending, context, execution, settings, checkpoint):
         indices={g['i']:i for i,g in enumerate(batch)}
         local={'topics':[{'representative':indices[t['representative']],
                          'groups':[indices[i] for i in t['groups']]} for t in output['topics']]}
-        incoming=combine([pending[g['i']] for g in batch],[local])
+        incoming=merge_topic_groups([pending[g['i']] for g in batch],[local])
         if not catalog:
             catalog=incoming
             continue
@@ -336,7 +354,7 @@ def consolidate_topics(pending, context, execution, settings, checkpoint):
         shards=pack(entries[:len(catalog)],settings.model_input_chars,base,limit-len(incoming))
         outputs=parallel(shards,lambda shard:merge_request({**base,'items':shard}),
             settings.strategy_concurrency,checkpoint,f'3/5 skill 对齐主题目录 {index}/{len(batches)}')
-        catalog=combine(groups,outputs)
+        catalog=merge_topic_groups(groups,outputs)
     complete([i for g in catalog for i in g['members']],[i for g in pending for i in g['members']])
     return catalog
 

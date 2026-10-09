@@ -272,3 +272,40 @@ def test_consolidation_shards_compare_all_topics_and_preserve_original_definitio
     merged=consolidate_topics(pending,context['business'],IdentityTransport(),settings,lambda _:None)
     assert merged==pending
     assert len([c for c in comparisons if len(c)==2])==len(pending)*(len(pending)-1)//2
+
+
+def test_actual_looping_response_retries_original_input_without_appending_truncated_output(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from pagggle.skill_execution import SkillOutputError
+    from pagggle.skill_strategy import Merges
+    @contextmanager
+    def connect():
+        with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+            db.row_factory=sqlite3.Row
+            yield db
+    with connect() as db:
+        row=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND stage='topic_consolidation' AND json_extract(payload,'$.status')='failed' LIMIT 1",
+            (PID,'68eccd18f7944299bbdd8c22679c1629')).fetchone()
+    if not row:pytest.skip('Requires actual repeated-ID response')
+    record=json.loads(row[0]);attempt=record['attempts'][-1]
+    assert attempt['finish_reason']=='length'
+    context=json.loads(record['request']['messages'][1]['content'])
+    requests=[];saved=[]
+    class RecordedTransport:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def post(self,url,**kwargs):
+            requests.append(kwargs['json'])
+            return httpx.Response(200,json={'choices':[{'message':{'content':attempt['content']},'finish_reason':'length'}],'usage':attempt['usage']})
+    monkeypatch.setattr('pagggle.skill_execution.httpx.Client',RecordedTransport)
+    settings=load_settings()
+    engine=SkillExecution(SimpleNamespace(connect=connect),PID,'offline',settings,load_skills(settings),lambda _:None)
+    monkeypatch.setattr(engine,'save',lambda key,stage,payload:saved.append(payload))
+    with pytest.raises(SkillOutputError):
+        engine.call('topic_consolidation',context,Merges,'离线验证实际截断响应的有限重试')
+    assert len(requests)==3 and saved[0]['status']=='failed'
+    assert all(json.loads(r['messages'][1]['content'])==context for r in requests)
+    assert all(len(r['messages'])==3 for r in requests[1:])
+    assert all(attempt['content'] not in m['content'] for r in requests for m in r['messages'])

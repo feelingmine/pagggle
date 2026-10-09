@@ -109,6 +109,12 @@ class SkillExecution:
                     usage={k:v for k,v in data.get('usage',{}).items() if k in {'prompt_tokens','completion_tokens','total_tokens'} and isinstance(v,int)}
                     record['attempts'].append({'request':request,'content':content,'usage':usage,'finish_reason':data['choices'][0].get('finish_reason')})
                     if data['choices'][0].get('finish_reason')=='length':
+                        if stage!='keyword_assignment' and attempt<2:
+                            request={**request,'messages':request['messages'][:2]+[{'role':'user','content':
+                                f'第 {attempt+1} 次响应达到输出上限。请重新检查全部原始输入，返回紧凑 JSON；'
+                                '不要循环重复任何数组或编号，每个输入编号只能归属一次。只输出 schema 要求的字段，说明简洁。'
+                                '上次不完整响应已丢弃，不能当作事实或继续补写。'}]}
+                            continue
                         raise SkillOutputError(f'{stage} 模型输出被截断，未保存部分分析')
                     try:
                         parsed=schema.model_validate_json(content)

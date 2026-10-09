@@ -87,12 +87,17 @@ class Store:
                     created_at TEXT NOT NULL, version INTEGER NOT NULL,
                     UNIQUE(project_id, job_id), UNIQUE(project_id, version)
                 );
+                CREATE TABLE IF NOT EXISTS keyword_onboarding (
+                    project_id TEXT PRIMARY KEY REFERENCES projects(id),
+                    run_id TEXT NOT NULL REFERENCES cluster_runs(id),
+                    selected_group_ids TEXT NOT NULL, completed_at TEXT NOT NULL
+                );
             """)
             if "options" not in {r["name"] for r in db.execute("PRAGMA table_info(jobs)")}:
                 db.execute("ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
             if "analysis_job_id" not in {r["name"] for r in db.execute("PRAGMA table_info(profiles)")}:
                 db.execute("ALTER TABLE profiles ADD COLUMN analysis_job_id TEXT")
-            db.execute("PRAGMA user_version=5")
+            db.execute("PRAGMA user_version=6")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -135,7 +140,9 @@ class Store:
             profiles = [{**dict(r), "payload": json.loads(r["payload"])} for r in db.execute("SELECT * FROM profiles WHERE project_id=? ORDER BY version DESC", (project_id,))]
             jobs = [{**dict(r), "options": json.loads(r["options"])} for r in db.execute("SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT 30", (project_id,))]
             runs = [{**dict(r), "usage": json.loads(r["usage"])} for r in db.execute("SELECT id,job_id,model,usage,created_at FROM model_runs WHERE project_id=? ORDER BY created_at DESC", (project_id,))]
-        return {"project": dict(project), "sources": sources, "profiles": profiles, "jobs": jobs, "model_runs": runs}
+            onboarding = db.execute("SELECT * FROM keyword_onboarding WHERE project_id=?", (project_id,)).fetchone()
+        return {"project": dict(project), "sources": sources, "profiles": profiles, "jobs": jobs, "model_runs": runs,
+            "keyword_onboarding": {**dict(onboarding), "selected_group_ids": json.loads(onboarding["selected_group_ids"])} if onboarding else None}
 
     def sources(self, project_id):
         self.project(project_id)
@@ -197,6 +204,43 @@ class Store:
             version = db.execute("SELECT COALESCE(MAX(version),0)+1 FROM cluster_runs WHERE project_id=?", (project_id,)).fetchone()[0]
             db.execute("INSERT INTO cluster_runs VALUES (?,?,?,?,?,?)", (uid(), project_id, job_id, encode(payload), now(), version))
             self.event(db, project_id, "keyword_clustered", {"job_id": job_id, "version": version, **payload["summary"]})
+
+    def keyword_onboarding(self, project_id):
+        self.project(project_id)
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM keyword_onboarding WHERE project_id=?", (project_id,)).fetchone()
+        return {**dict(row), "selected_group_ids": json.loads(row["selected_group_ids"])} if row else None
+
+    def complete_keyword_onboarding(self, project_id, run_id, selected_group_ids):
+        self.project(project_id)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            run = db.execute("SELECT * FROM cluster_runs WHERE project_id=? AND id=?", (project_id, run_id)).fetchone()
+            if not run:
+                raise LookupError("本项目没有该分析结果")
+            existing = db.execute("SELECT * FROM keyword_onboarding WHERE project_id=?", (project_id,)).fetchone()
+            if existing:
+                if existing["run_id"] == run_id and sorted(json.loads(existing["selected_group_ids"])) == sorted(selected_group_ids):
+                    return {**dict(existing), "selected_group_ids": json.loads(existing["selected_group_ids"])}
+                raise ValueError("首次关键词分析已经完成，原筛选记录保留")
+            if db.execute("SELECT 1 FROM jobs WHERE project_id=? AND status IN ('queued','running')", (project_id,)).fetchone():
+                raise ValueError("请等待当前任务结束，再确认完成")
+            latest = db.execute("SELECT MAX(version) FROM cluster_runs WHERE project_id=?", (project_id,)).fetchone()[0]
+            job = db.execute("SELECT status FROM jobs WHERE project_id=? AND id=?", (project_id, run["job_id"])).fetchone()
+            if run["version"] != latest or not job or job["status"] != "succeeded":
+                raise ValueError("请使用最新成功的全量分析结果")
+            groups = json.loads(run["payload"])["groups"]
+            members = [m["demand_id"] for g in groups for m in g["members"]]
+            current = {r[0] for r in db.execute("SELECT id FROM demands WHERE project_id=? AND kind='keyword' AND status='pending'", (project_id,))}
+            if not current or set(members) != current or len(members) != len(current):
+                raise ValueError("还有有效关键词未纳入此结果，请重新分析全部关键词")
+            allowed = {g["target_page_id"] for g in groups}
+            if len(set(selected_group_ids)) != len(selected_group_ids) or not set(selected_group_ids) <= allowed:
+                raise ValueError("所选候选组不属于此分析结果或重复，请刷新后重试")
+            completed_at = now()
+            db.execute("INSERT INTO keyword_onboarding VALUES (?,?,?,?)", (project_id, run_id, encode(selected_group_ids), completed_at))
+            self.event(db, project_id, "keyword_onboarding_completed", {"run_id": run_id, "keywords": len(current), "selected_groups": len(selected_group_ids)})
+        return {"project_id": project_id, "run_id": run_id, "selected_group_ids": selected_group_ids, "completed_at": completed_at}
 
     def save_intents(self, project_id, job_id, profile_version, results, model, usage):
         with self.connect() as db:

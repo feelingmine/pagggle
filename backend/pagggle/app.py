@@ -58,10 +58,15 @@ class ReviewInput(BaseModel):
 class IntakeInput(BaseModel):
     kind: Literal["keyword", "customer_question", "product_change"] = "keyword"
     format: Literal["lines", "csv", "xlsx"] = "lines"
-    text: str = Field(min_length=1, max_length=2000000)
+    text: str = Field(min_length=1)
     market: str | None = Field(default=None, max_length=100)
     language: str | None = Field(default=None, max_length=100)
     request_id: str = Field(min_length=10, max_length=100)
+
+
+class KeywordCompletionInput(BaseModel):
+    run_id: str = Field(min_length=1)
+    selected_group_ids: list[str]
 
 
 def create_app(settings=None, store=None):
@@ -86,7 +91,9 @@ def create_app(settings=None, store=None):
                 return JSONResponse({"detail": "不接受跨站写入请求"}, status_code=403)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "仅接受 JSON 请求"}, status_code=415)
-            if len(await request.body()) > 3000000:
+            path = request.url.path.strip("/").split("/")
+            intake = request.method == "POST" and len(path) == 5 and path[:2] == ["api", "projects"] and path[3] == "demands" and path[4] in {"preview", "import"}
+            if not intake and len(await request.body()) > 3000000:
                 return JSONResponse({"detail": "资料过大，请拆分补充"}, status_code=413)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -307,11 +314,19 @@ def create_app(settings=None, store=None):
 
     @app.post("/api/projects/{project_id}/demands/preview")
     def preview_demands(project_id: str, data: IntakeInput):
+        if data.kind != "keyword" and not store.keyword_onboarding(project_id):
+            raise ValueError("请先完成首次关键词分析，再添加客户问题或产品变化")
         return import_records(store, project_id, data.model_dump())
 
     @app.post("/api/projects/{project_id}/demands/import", status_code=201)
     def commit_demands(project_id: str, data: IntakeInput):
+        if data.kind != "keyword" and not store.keyword_onboarding(project_id):
+            raise ValueError("请先完成首次关键词分析，再添加客户问题或产品变化")
         return import_records(store, project_id, data.model_dump(), commit=True)
+
+    @app.post("/api/projects/{project_id}/keyword-onboarding/complete")
+    def complete_keyword_onboarding(project_id: str, data: KeywordCompletionInput):
+        return store.complete_keyword_onboarding(project_id, data.run_id, data.selected_group_ids)
 
     @app.get("/")
     def home():

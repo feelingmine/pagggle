@@ -364,4 +364,6 @@ def create_app(settings=None, store=None):
         return FileResponse(ROOT / "frontend" / "index.html")
 
     app.mount("/assets", StaticFiles(directory=ROOT / "frontend"), name="assets")
+    from .content_workflow import register_content_workflow
+    register_content_workflow(app, store, settings)
     return app

@@ -5,7 +5,7 @@ import re
 from collections import Counter, defaultdict
 from urllib.parse import unquote, urlsplit
 
-VERSION = "silicone-content-strategy-1"
+VERSION = "silicone-content-strategy-3"
 # Ordered objects: accessories before parent products, specific products before hubs.
 OBJECTS = [
     ("pet", "宠物硅胶用品", r"\b(?:pet|dog|cat)s?\b", "pet silicone products"),
@@ -43,7 +43,7 @@ TASKS = {
 }
 # Each item is an answer requirement, not an assertion of company capability.
 REQUIREMENTS = {
-    "product": [("产品与适用场景", r"application|feeding|teething|baby|infant|use"), ("规格与可选配置", r"size|dimension|capacity|hardness|weight|piece"), ("材料及依据", r"material|food.grade|silicone"), ("询盘与选型下一步", r"quote|contact|inquir|drawing|sample")],
+    "product": [("产品与适用场景", r"application|feeding|teething|baby|infant|use"), ("规格与可选配置", r"size|dimension|capacity|hardness|weight|piece"), ("材料及依据", r"material|food.grade|food.contact|platinum.cured|test report"), ("询盘与选型下一步", r"quote|contact|inquir|drawing|sample")],
     "sourcing": [("产品与定制范围", r"custom|oem|odm|logo|packaging"), ("MOQ 与样品条件", r"moq|minimum order|sample"), ("交期与流程", r"lead.time|delivery|production|process"), ("质量与证明材料", r"test|quality|inspection|certificate|report"), ("询价所需信息", r"drawing|specification|quote|quantity|contact")],
     "care": [("清洁步骤", r"wash|clean|rinse"), ("温度与设备条件", r"temperature|dishwasher|boil|heat"), ("不适用情形与限制", r"avoid|do not|caution|warning|damage"), ("干燥储存与更换", r"dry|storage|store|replace|wear")],
     "safety": [("材料与产品适用范围", r"material|food.contact|food.grade"), ("证明文件与测试范围", r"test|report|certificate|standard"), ("使用限制与风险", r"risk|hazard|avoid|warning|supervision"), ("采购核验方法", r"verify|check|request|documentation|supplier")],
@@ -150,7 +150,15 @@ def page_object(page):
     path = unquote(urlsplit(page['url']).path).replace('-', ' ')
     # The most specific final URL segment avoids classifying every baby URL as the hub.
     leaf = path.rstrip('/').split('/')[-1]
-    return classify(leaf + ' ' + page.get('title',''), filter_scope=False)[:2]
+    obj = classify(leaf or page.get('title',''), filter_scope=False)[0]
+    if not obj:
+        obj = classify(page.get('title',''), filter_scope=False)[0]
+    task = classify(leaf, filter_scope=False)[1]
+    if '/custom silicone products/' in path and task=='product':
+        task='sourcing'
+    if not leaf:
+        task=classify(page.get('title',''), filter_scope=False)[1]
+    return obj, task
 
 
 def evidence_lines(pages):
@@ -158,7 +166,7 @@ def evidence_lines(pages):
     counts = Counter(line.strip() for lines in sets for line in lines)
     result = {}
     for p in pages:
-        result[p['url']] = [line.strip() for line in p.get('body','').splitlines() if len(line.strip()) >= 45 and not (len(sets)>2 and counts[line.strip()] > len(sets)*0.5)]
+        result[p['url']] = [line.strip() for line in p.get('body','').splitlines() if ((len(line.strip()) >= 80 and re.search(r'[.!?;:]',line)) or (len(line.strip()) >= 25 and ':' in line and re.search(r'\d',line))) and line.strip()!=p.get('title') and not (len(sets)>2 and counts[line.strip()] > len(sets)*0.5)]
     return result
 
 
@@ -167,10 +175,10 @@ def decide(topics, pages, competitors):
     competitor_lines = evidence_lines(competitors)
     for topic in topics:
         obj, task = topic['object'], topic['task']
-        same_object = [p for p in pages if p.get('status')!='excluded' and re.search(OBJECT_MAP[obj][2], normalized(unquote(urlsplit(p['url']).path).rstrip('/').split('/')[-1]+' '+p.get('title','')))]
+        same_object = [p for p in pages if p.get('status')!='excluded' and (page_object(p)[0]==obj or (obj in {'cup','bottle'} and re.search(r'cups?.{0,8}bottles?|bottles?.{0,8}cups?', normalized(unquote(urlsplit(p['url']).path).rstrip('/').split('/')[-1]))))]
         exact = [p for p in same_object if page_object(p)[1] == task]
         candidates = exact or (same_object if task in {'product','sourcing'} else [])
-        candidates.sort(key=lambda p:(p.get('status')!='read',len(urlsplit(p['url']).path),p['url']))
+        candidates.sort(key=lambda p:(p.get('status')!='read',urlsplit(p['url']).path=='/',len(urlsplit(p['url']).path),p['url']))
         page = next((p for p in candidates if p.get('status')=='read'),None)
         requirements = []
         for title, pattern in REQUIREMENTS[task]:
@@ -179,7 +187,7 @@ def decide(topics, pages, competitors):
         matched_competitors = []
         for p in competitors:
             po, pt = page_object(p)
-            if p.get('status')=='read' and (po == obj or (obj in {'manufacturing','odm','mold'} and re.search(r'manufactur|mold|tooling|design',p.get('title',''),re.I))):
+            if p.get('status')=='read':
                 quote = next((line.strip() for line in p.get('body','').splitlines() if len(line.strip())>=60 and re.search(OBJECT_MAP[obj][2],line,re.I)),None)
                 if quote:
                     matched_competitors.append({"url":p['url'],"title":p['title'],"quote":quote,"basis":"竞品内容参考；不代表本站能力或搜索排名"})
@@ -189,7 +197,7 @@ def decide(topics, pages, competitors):
                 {'url': p['url'], 'quote': line}
                 for p in matched_competitors
                 for line in competitor_lines.get(p['url'], [])
-                if re.search(pattern, line, re.I)
+                if re.search(pattern, line, re.I) and (page_object(p)[0]==obj or re.search(OBJECT_MAP[obj][2],line,re.I))
             ][:3]
         if page:
             action = 'optimize' if missing else 'keep'
@@ -208,7 +216,7 @@ def decide(topics, pages, competitors):
             candidates=[{"url":p['url'],"title":p.get('title',p['url']),"status":p.get('status')} for p in candidates],
             requirements=requirements,competitors=matched_competitors,
             related_pages=[{"url":p['url'],"title":p.get('title','')} for p in same_object if p.get('status')=='read'],
-            decision_basis=[f"基础词：{topic['seed']}",f"客户任务：{TASKS[task][0]}",f"覆盖 {topic['keyword_count']} 个实测词；未知或冲突指标不按零处理", "排名/询盘价值未实测；竞品覆盖不是排名证据"])
+            decision_basis=[f"价值判断：{value}。{value_reason}",f"基础词：{topic['seed']}",f"客户任务：{TASKS[task][0]}",f"覆盖 {topic['keyword_count']} 个实测词；未知或冲突指标不按零处理", "排名/询盘价值未实测；竞品覆盖不是排名证据"])
     return sorted(topics,key=lambda t:(t['volume'] is None,-(t['volume'] or 0),t['kd'] is None,t['kd'] if t['kd'] is not None else 101,t['id']))
 
 
@@ -230,14 +238,27 @@ def brief(topic):
         'manufacturing':'材料、结构、模具、打样、起订条件与检验交付',
         'odm':'想法/样品输入、设计迭代、打样验证与量产交接',
     }.get(topic['object'], '产品适用场景、规格、材料、定制范围与验证资料')
+    instructions = {
+        '规格与可选配置':f'增加规格对照表，列出{dimensions}中的可选项和已验证范围；未知参数留作内部核对项。',
+        '询盘与选型下一步':'在产品介绍后提供清楚的咨询入口，说明想法、参考图片、样品或图纸均可开始；已知数量和规格可选填，不强制用户先准备完整资料。',
+        '材料及依据':'区分材料类别、具体产品与测试报告；列出报告对应对象、用途和日期，不把材料符合要求写成整件产品获批。',
+        '产品与适用场景':f'按目标客户使用场景解释产品差异，结合{dimensions}说明适配边界，并链接对应产品。',
+        'MOQ 与样品条件':'分别解释现有模具与新开模、单款与混色的 MOQ/样品条件；未知数值需业务确认，允许先咨询。',
+        '交期与流程':'按需求核对、设计/模具、打样确认、生产与交付列步骤；说明哪些输入影响周期，不编造承诺天数。',
+        '质量与证明材料':'按产品/市场列需要核对的测试和检验材料，并关联实际可公开证明；不要复制竞品认证声明。',
+        '清洁步骤':'按拆卸、清洗、冲洗和干燥组织操作步骤；各步骤说明对应产品范围，引用企业验证资料。',
+        '温度与设备条件':'核对具体产品对洗碗机、煮沸及其它设备的适用条件；未验证温度和时间不得写成通用建议。',
+        '成本构成':'拆分产品材料、结构、模具、表面/印刷、包装和检验对报价的影响，区分一次性费用与单件费用。',
+        '报价所需资料':'给出可选资料清单及报价假设，接受想法/样品起步；对尚未明确的数量和规格给出下一步沟通方式。',
+    }
     modules = []
     for req in topic['requirements']:
         modules.append({"heading":f"{obj}：{req['title']}", "question":f"回答“{topic['primary']}”背后的{req['title']}问题；结合{dimensions}说明选择依据和限制。",
-            "instructions": ("保留已有内容并核对范围。" if req['covered'] else f"补充{req['title']}的具体信息；未获得企业证据时保留待确认。"),
+            "instructions": ("保留已有内容并核对范围。" if req['covered'] else instructions.get(req['title'],f"补充{req['title']}：围绕{dimensions}解释选择依据、流程与限制；未获得企业证据时保留待确认。")),
             "evidence":req['evidence'],"needs_confirmation":not req['covered']})
     return {"kind":action, "title":topic['title'], "target_url":topic['target_url'], "primary_keyword":topic['primary'],
         "buyer_task":TASKS[topic['task']][0],"content_type":"产品/供货页面" if topic['task'] in {'product','sourcing'} else "选型或使用指南 / 可先评估现有页模块",
-        "optimization":[{"gap":r['title'],"suggestion":f"在现有页面补充“{r['title']}”模块：围绕{dimensions}给出可核对的选项/流程/限制，链接对应规格或证明文件。先核对原文是否已有，保留已确认内容；不直接套用竞品承诺。"} for r in topic['requirements'] if not r['covered']] if action=='optimize' else [],
+        "optimization":[{"gap":r['title'],"suggestion":instructions.get(r['title'],f"在现有页面补充“{r['title']}”模块：围绕{dimensions}给出可核对的选项/流程/限制，链接对应资料。先核对原文是否已有，保留已确认内容。")} for r in topic['requirements'] if not r['covered']] if action=='optimize' else [],
         "outline":modules if action in {'new','optimize'} else [],
         "supporting_keywords":topic['sample_keywords'],"internal_links":topic['related_pages'],
         "cta":"从想法、参考图片、样品或图纸开始咨询；已知的数量和规格可帮助核对方案，资料不完整也可联系。" if topic['task'] in {'sourcing','product','cost','process'} else "查看相关产品与材料说明；使用条件不明时联系企业核实。",

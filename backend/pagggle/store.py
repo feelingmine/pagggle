@@ -104,12 +104,22 @@ class Store:
                     payload TEXT NOT NULL, created_at TEXT NOT NULL,
                     UNIQUE(project_id, run_id, revision)
                 );
+                CREATE TABLE IF NOT EXISTS content_runs (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    job_id TEXT NOT NULL REFERENCES jobs(id), version TEXT NOT NULL,
+                    input_json TEXT, result_json TEXT, input_hash TEXT, result_hash TEXT,
+                    replay_of TEXT, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS content_assets (
+                    project_id TEXT NOT NULL REFERENCES projects(id), url TEXT NOT NULL,
+                    payload TEXT NOT NULL, PRIMARY KEY(project_id, url)
+                );
             """)
             if "options" not in {r["name"] for r in db.execute("PRAGMA table_info(jobs)")}:
                 db.execute("ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
             if "analysis_job_id" not in {r["name"] for r in db.execute("PRAGMA table_info(profiles)")}:
                 db.execute("ALTER TABLE profiles ADD COLUMN analysis_job_id TEXT")
-            db.execute("PRAGMA user_version=8")
+            db.execute("PRAGMA user_version=9")
         self.path.chmod(0o600)
 
     @contextmanager

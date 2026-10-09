@@ -19,5 +19,6 @@
   "clustering_model": "sentence-transformers/all-MiniLM-L6-v2",
   "clustering_model_cache": "data/models",
   "clustering_distance_threshold": 0.65,
-  "clustering_serp_threshold": 3
+  "clustering_serp_threshold": 3,
+  "content_workflows": {}
 }

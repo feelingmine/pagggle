@@ -58,3 +58,24 @@ def test_replay_and_decision_evidence(frozen):
                 assert req['evidence']['quote'] in page_map[req['evidence']['url']]['body']
     assert any(t['action']=='review' and any(p['status']=='uncovered' for p in t['candidates']) for t in result['topics'])
     assert all(e['volume'] is None and e['kd'] is None for e in result['expansions'] if not e['observed'])
+
+
+def test_real_competitor_widget_is_not_document_challenge():
+    from bs4 import BeautifulSoup
+    from pagggle.crawl import parse_html
+    path=ROOT/'data/verification/content-workflow/newtop-real.html'
+    assert path.exists(), 'Capture the authorized real competitor HTML first'
+    raw=path.read_bytes()
+    soup=BeautifulSoup(raw,'html.parser')
+    assert any('recaptcha' in t.get_text().lower() for t in soup.find_all('title'))
+    title,body,_=parse_html(raw,'https://www.newtopsilicone.com/product-cases/mom-baby-supplies/')
+    assert 'NEWTOP' in title and 'Silicone Teether' in body
+
+
+def test_url_task_precedes_marketing_title(frozen):
+    from pagggle.content_strategy import page_object
+    page=next(p for p in frozen['pages'] if p['url'].endswith('/custom-baby-silicone-feeding-set-manufacturer/'))
+    assert page_object(page)==('feeding_set','sourcing')
+    for topic in build_result(frozen)['topics']:
+        if topic['object']=='manufacturing' and topic['target_url']:
+            assert '/kitchen-silicone-products/' not in topic['target_url']

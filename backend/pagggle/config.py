@@ -6,6 +6,16 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class ContentWorkflowSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    seed_file: str
+    keyword_files: list[str]
+    competitor_urls: list[str]
+    own_evidence_urls: list[str] = Field(default_factory=list)
+    market: str = "us"
+    language: str = "en"
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -30,6 +40,7 @@ class Settings(BaseModel):
     clustering_model_cache: str = "data/models"
     clustering_distance_threshold: float = Field(default=0.65, gt=0, le=2, allow_inf_nan=False)
     clustering_serp_threshold: int = Field(default=3, ge=1, le=10)
+    content_workflows: dict[str, ContentWorkflowSettings] = Field(default_factory=dict)
 
     @field_validator("BASE_URL")
     @classmethod

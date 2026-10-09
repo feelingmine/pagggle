@@ -150,10 +150,11 @@ def fetch_firecrawl(url, settings, allowed_host):
 
 def parse_html(raw, base):
     soup = BeautifulSoup(raw, "html.parser")
+    document_title = soup.head.find("title") if soup.head else soup.find("title")
     refresh = soup.find("meta", attrs={"http-equiv": lambda value: value and value.lower() == "refresh"})
-    if refresh or soup.find("title", string=lambda value: value and any(x in value.lower() for x in ("just a moment", "captcha", "access denied"))):
+    if refresh or (document_title and any(x in document_title.get_text().lower() for x in ("just a moment", "captcha", "access denied"))):
         raise CrawlError("页面返回验证或跳转中转页，未作为业务内容保存；请调整采集方式或补充文本资料")
-    title = soup.title.get_text(" ", strip=True) if soup.title else base
+    title = document_title.get_text(" ", strip=True) if document_title else base
     links = []
     for tag in soup.find_all("a", href=True):
         try:

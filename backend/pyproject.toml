@@ -1,0 +1,21 @@
+[project]
+name = "pagggle"
+version = "0.1.0"
+description = "Evidence-first content operations for export businesses"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "httpx>=0.28,<1",
+  "beautifulsoup4>=4.13,<5",
+  "sentence-transformers>=6.1,<7",
+  "scikit-learn>=1.6,<2",
+  "openpyxl>=3.1,<4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

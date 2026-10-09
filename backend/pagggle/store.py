@@ -1,0 +1,285 @@
+import json
+import os
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def uid():
+    return uuid4().hex
+
+
+def encode(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
+class Store:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.chmod(0o700)
+        descriptor = os.open(self.path, os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        self.path.chmod(0o600)
+        with self.connect() as db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, site_url TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE IF NOT EXISTS sources (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    url TEXT, title TEXT NOT NULL, kind TEXT NOT NULL,
+                    status TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', error TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(project_id, url)
+                );
+                CREATE TABLE IF NOT EXISTS profiles (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    version INTEGER NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+                    reason TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(project_id, version)
+                );
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    kind TEXT NOT NULL, status TEXT NOT NULL, progress TEXT NOT NULL,
+                    error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS active_project_job
+                    ON jobs(project_id) WHERE status IN ('queued', 'running');
+                CREATE TABLE IF NOT EXISTS events (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    name TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS model_runs (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    job_id TEXT NOT NULL REFERENCES jobs(id), model TEXT NOT NULL,
+                    usage TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS intake_batches (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    request_id TEXT NOT NULL, content_hash TEXT NOT NULL, result TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(project_id, request_id)
+                );
+                CREATE TABLE IF NOT EXISTS demands (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    batch_id TEXT NOT NULL REFERENCES intake_batches(id), kind TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE IF NOT EXISTS intent_results (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    demand_id TEXT NOT NULL REFERENCES demands(id), profile_version INTEGER NOT NULL,
+                    job_id TEXT NOT NULL REFERENCES jobs(id), status TEXT NOT NULL,
+                    payload TEXT, error TEXT, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS cluster_runs (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    job_id TEXT NOT NULL REFERENCES jobs(id), payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL, version INTEGER NOT NULL,
+                    UNIQUE(project_id, job_id), UNIQUE(project_id, version)
+                );
+            """)
+            if "options" not in {r["name"] for r in db.execute("PRAGMA table_info(jobs)")}:
+                db.execute("ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
+            if "analysis_job_id" not in {r["name"] for r in db.execute("PRAGMA table_info(profiles)")}:
+                db.execute("ALTER TABLE profiles ADD COLUMN analysis_job_id TEXT")
+            db.execute("PRAGMA user_version=5")
+        self.path.chmod(0o600)
+
+    @contextmanager
+    def connect(self):
+        db = sqlite3.connect(self.path, timeout=10)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def project(self, project_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not row:
+            raise LookupError("项目不存在")
+        return dict(row)
+
+    def create_project(self, name, site_url):
+        project_id, timestamp = uid(), now()
+        with self.connect() as db:
+            db.execute("INSERT INTO projects VALUES (?,?,?,?,?,1)", (project_id, name, site_url, timestamp, timestamp))
+            self.event(db, project_id, "project_initialized", {})
+        return self.project(project_id)
+
+    def list_projects(self):
+        with self.connect() as db:
+            return [dict(r) for r in db.execute("SELECT * FROM projects ORDER BY created_at DESC")]
+
+    def snapshot(self, project_id):
+        # A single read transaction avoids mixing pre-completion usage with a completed job.
+        with self.connect() as db:
+            db.execute("BEGIN")
+            project = db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not project:
+                raise LookupError("项目不存在")
+            sources = [dict(r) for r in db.execute("SELECT * FROM sources WHERE project_id=? ORDER BY created_at", (project_id,))]
+            profiles = [{**dict(r), "payload": json.loads(r["payload"])} for r in db.execute("SELECT * FROM profiles WHERE project_id=? ORDER BY version DESC", (project_id,))]
+            jobs = [{**dict(r), "options": json.loads(r["options"])} for r in db.execute("SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT 30", (project_id,))]
+            runs = [{**dict(r), "usage": json.loads(r["usage"])} for r in db.execute("SELECT id,job_id,model,usage,created_at FROM model_runs WHERE project_id=? ORDER BY created_at DESC", (project_id,))]
+        return {"project": dict(project), "sources": sources, "profiles": profiles, "jobs": jobs, "model_runs": runs}
+
+    def sources(self, project_id):
+        self.project(project_id)
+        with self.connect() as db:
+            return [dict(r) for r in db.execute("SELECT * FROM sources WHERE project_id=? ORDER BY created_at", (project_id,))]
+
+    def demands(self, project_id):
+        self.project(project_id)
+        with self.connect() as db:
+            return [{**json.loads(r["payload"]), "created_at": r["created_at"], "batch_id": r["batch_id"]} for r in db.execute("SELECT * FROM demands WHERE project_id=? ORDER BY created_at DESC, rowid", (project_id,))]
+
+    def add_source(self, project_id, *, title, body="", url=None, kind="manual", status="read", error=None):
+        self.project(project_id)
+        timestamp, source_id = now(), uid()
+        with self.connect() as db:
+            # Read snapshots are immutable: retries may only replace unread discoveries.
+            existing = db.execute("SELECT * FROM sources WHERE project_id=? AND url=?", (project_id, url)).fetchone() if url else None
+            if existing and existing["status"] == "read":
+                return dict(existing)
+            if existing:
+                source_id = existing["id"]
+                db.execute("UPDATE sources SET title=?, body=?, status=?, error=?, updated_at=?, version=version+1 WHERE id=? AND project_id=?", (title, body, status, error, timestamp, source_id, project_id))
+            else:
+                db.execute("INSERT INTO sources VALUES (?,?,?,?,?,?,?,?,?,?,1)", (source_id, project_id, url, title, kind, status, body, error, timestamp, timestamp))
+            row = db.execute("SELECT * FROM sources WHERE id=? AND project_id=?", (source_id, project_id)).fetchone()
+        return dict(row)
+
+    def intents(self, project_id):
+        self.project(project_id)
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM intent_results WHERE project_id=? ORDER BY rowid DESC", (project_id,)).fetchall()
+        latest = {}
+        for row in rows:
+            if row["demand_id"] not in latest:
+                latest[row["demand_id"]] = {**dict(row), "payload": json.loads(row["payload"]) if row["payload"] else None}
+        return list(latest.values())
+
+    def pending_intents(self, project_id):
+        results = {r["demand_id"]: r for r in self.intents(project_id)}
+        return [r for r in self.demands(project_id) if r["status"] == "pending" and (r["id"] not in results or results[r["id"]]["status"] == "failed")]
+
+    def cluster_runs(self, project_id):
+        self.project(project_id)
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM cluster_runs WHERE project_id=? ORDER BY version DESC", (project_id,)).fetchall()
+        return [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]
+
+    def save_clusters(self, project_id, job_id, payload):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = db.execute("SELECT status,options FROM jobs WHERE project_id=? AND id=?", (project_id, job_id)).fetchone()
+            if not job or job["status"] != "running":
+                raise ValueError("任务已取消，聚类结果未写入")
+            expected = json.loads(job["options"])["demand_ids"]
+            actual = [m["demand_id"] for g in payload["groups"] for m in g["members"]]
+            known = {r["id"] for r in db.execute("SELECT id FROM demands WHERE project_id=? AND kind='keyword' AND status='pending'", (project_id,))}
+            if len(actual) != len(set(actual)) or set(actual) != set(expected) or not set(actual) <= known:
+                raise ValueError("聚类成员遗漏、重复或不属于本项目，结果未保存")
+            version = db.execute("SELECT COALESCE(MAX(version),0)+1 FROM cluster_runs WHERE project_id=?", (project_id,)).fetchone()[0]
+            db.execute("INSERT INTO cluster_runs VALUES (?,?,?,?,?,?)", (uid(), project_id, job_id, encode(payload), now(), version))
+            self.event(db, project_id, "keyword_clustered", {"job_id": job_id, "version": version, **payload["summary"]})
+
+    def save_intents(self, project_id, job_id, profile_version, results, model, usage):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = db.execute("SELECT status FROM jobs WHERE project_id=? AND id=?", (project_id, job_id)).fetchone()
+            if not job or job["status"] != "running":
+                raise ValueError("任务已取消，意图结果未写入")
+            profile = db.execute("SELECT version,status FROM profiles WHERE project_id=? ORDER BY version DESC LIMIT 1", (project_id,)).fetchone()
+            if not profile or profile["version"] != profile_version or profile["status"] != "confirmed":
+                raise ValueError("业务理解已变化，请核对最新版本后重试")
+            for result in results:
+                demand = db.execute("SELECT id FROM demands WHERE project_id=? AND id=? AND status='pending'", (project_id, result["input_id"])).fetchone()
+                if not demand:
+                    raise ValueError("需求不属于本项目的有效输入")
+                db.execute("INSERT INTO intent_results VALUES (?,?,?,?,?,?,?,?,?)", (uid(), project_id, demand["id"], profile_version, job_id, result["status"], encode(result["payload"]) if result["payload"] else None, result["error"], now()))
+            if usage is not None:
+                db.execute("INSERT INTO model_runs VALUES (?,?,?,?,?,?)", (uid(), project_id, job_id, model, encode(usage), now()))
+            self.event(db, project_id, "intent_extracted", {"job_id": job_id, "profile_version": profile_version, "count": len(results), "failed": sum(r["status"] == "failed" for r in results)})
+
+    @staticmethod
+    def event(db, project_id, name, payload):
+        db.execute("INSERT INTO events VALUES (?,?,?,?,?)", (uid(), project_id, name, encode(payload), now()))
+
+    def profiles(self, project_id):
+        self.project(project_id)
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM profiles WHERE project_id=? ORDER BY version DESC", (project_id,)).fetchall()
+        return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
+
+    def save_profile(self, project_id, payload, reason, expected_version, status="draft", job_id=None):
+        self.project(project_id)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if job_id:
+                job = db.execute("SELECT status FROM jobs WHERE id=? AND project_id=?", (job_id, project_id)).fetchone()
+                if not job or job["status"] != "running":
+                    raise ValueError("任务已取消，画像未写入")
+            version = db.execute("SELECT COALESCE(MAX(version),0) FROM profiles WHERE project_id=?", (project_id,)).fetchone()[0]
+            if version != expected_version:
+                raise ValueError("画像已有新版本，请刷新后重试")
+            timestamp = now()
+            previous = db.execute("SELECT analysis_job_id FROM profiles WHERE project_id=? ORDER BY version DESC LIMIT 1", (project_id,)).fetchone()
+            analysis_job_id = job_id or (previous[0] if previous else None)
+            db.execute("INSERT INTO profiles VALUES (?,?,?,?,?,?,?,?,?)", (uid(), project_id, version+1, status, encode(payload), reason, timestamp, timestamp, analysis_job_id))
+            self.event(db, project_id, "site_understanding_confirmed" if status == "confirmed" else "site_understanding_revised", {"version": version+1})
+        return self.profiles(project_id)[0]
+
+    def confirm_profile(self, project_id, expected_version, reason):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM profiles WHERE project_id=? ORDER BY version DESC LIMIT 1", (project_id,)).fetchone()
+            if not row or row["version"] != expected_version:
+                raise ValueError("画像版本已变化，请刷新后重新核对")
+            if not json.loads(row["payload"])["facts"]:
+                raise ValueError("空画像不能确认")
+            db.execute("UPDATE profiles SET status='confirmed', reason=?, updated_at=? WHERE id=? AND project_id=?", (reason, now(), row["id"], project_id))
+            self.event(db, project_id, "site_understanding_confirmed", {"version": expected_version})
+        return self.profiles(project_id)[0]
+
+    def jobs(self, project_id):
+        self.project(project_id)
+        with self.connect() as db:
+            return [{**dict(r), "options": json.loads(r["options"])} for r in db.execute("SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT 30", (project_id,))]
+
+    def create_job(self, project_id, kind, options=None):
+        self.project(project_id)
+        job_id, timestamp = uid(), now()
+        try:
+            with self.connect() as db:
+                db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,1,?)", (job_id, project_id, kind, "queued", "等待执行", None, timestamp, timestamp, encode(options or {})))
+        except sqlite3.IntegrityError:
+            raise ValueError("本项目已有进行中的任务，请等待或取消后重试") from None
+        return job_id
+
+    def update_job(self, project_id, job_id, *, status=None, progress=None, error=None):
+        with self.connect() as db:
+            db.execute("UPDATE jobs SET status=COALESCE(?,status), progress=COALESCE(?,progress), error=?, updated_at=?, version=version+1 WHERE id=? AND project_id=? AND status IN ('queued','running')", (status, progress, error, now(), job_id, project_id))
+
+    def cancelled(self, project_id, job_id):
+        with self.connect() as db:
+            row = db.execute("SELECT status FROM jobs WHERE id=? AND project_id=?", (job_id, project_id)).fetchone()
+        return not row or row["status"] not in {"queued", "running"}
+
+    def recover_jobs(self):
+        with self.connect() as db:
+            db.execute("UPDATE jobs SET status='failed', error='服务重启导致任务中断，请重试', updated_at=?, version=version+1 WHERE status IN ('queued','running')", (now(),))

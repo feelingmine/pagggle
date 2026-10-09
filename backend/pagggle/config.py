@@ -1,0 +1,57 @@
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class Settings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    BASE_URL: str
+    model: str = Field(min_length=1)
+    api_key: SecretStr
+    database_path: str = "data/pagggle.sqlite3"
+    host: str = "127.0.0.1"
+    port: int = Field(default=8000, ge=1024, le=65535)
+    crawl_max_pages: int | None = Field(default=None, ge=1)
+    crawl_dns: Literal["system", "cloudflare"] = "system"
+    crawl_backend: Literal["direct", "firecrawl"] = "direct"
+    firecrawl_api_key: SecretStr = SecretStr("")
+    scrape_timeout_seconds: int = Field(default=60, ge=10, le=180)
+    request_timeout_seconds: int = Field(default=30, ge=1, le=120)
+    model_timeout_seconds: int = Field(default=120, ge=1, le=300)
+    model_max_tokens: int = Field(default=6000, ge=256, le=16000)
+    model_thinking: Literal["enabled", "disabled"] | None = None
+    model_input_chars: int = Field(default=60000, ge=1000, le=200000)
+    intent_batch_size: int = Field(default=5, ge=1, le=20)
+    clustering_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    clustering_model_cache: str = "data/models"
+    clustering_distance_threshold: float = Field(default=0.65, gt=0, le=2, allow_inf_nan=False)
+    clustering_serp_threshold: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("BASE_URL")
+    @classmethod
+    def validate_endpoint(cls, value):
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("Model endpoint must be an HTTPS URL without credentials or query")
+        return value.rstrip("/")
+
+    @field_validator("host")
+    @classmethod
+    def local_only(cls, value):
+        if value != "127.0.0.1":
+            raise ValueError("This local pilot must bind to 127.0.0.1")
+        return value
+
+
+def load_settings(path: Path | None = None) -> Settings:
+    try:
+        return Settings.model_validate_json((path or ROOT / "config.json").read_text())
+    except (OSError, ValueError):
+        # Validation errors may contain raw input, including credentials.
+        raise RuntimeError("配置无效：请对照 config.example.json 检查本地 config.json。") from None

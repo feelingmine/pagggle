@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>pagggle · 业务理解</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="app-header">
+    <a class="wordmark" href="#start" aria-label="pagggle 首页">pagggle<span>.</span></a>
+    <label class="sr-only" for="project-select">选择项目</label>
+    <select id="project-select"><option value="">选择项目</option></select>
+    <nav class="app-nav" aria-label="工作区">
+      <a href="#start" id="start-nav">网站优化</a>
+      <a href="#demands" id="demand-nav">机会清单</a>
+      <span class="not-available" title="当前版本暂未开放">页面任务</span>
+      <span class="not-available" title="当前版本暂未开放">交付记录</span>
+    </nav>
+    <button class="text-button header-action" data-action="project-menu">项目设置</button>
+  </header>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <main id="main" tabindex="-1"><div class="initial-loading">正在打开工作区…</div></main>
+  <dialog id="modal" aria-labelledby="dialog-title"><div id="modal-content"></div></dialog>
+</body>
+</html>

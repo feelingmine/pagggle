@@ -81,3 +81,24 @@ test('coverage uses every valid keyword while filtering searches secondary membe
   assert.equal(ui.run('clusterCoversAll(clusterRun())'), true);
   assert.equal(ui.run('state.demands.push({id:"c",kind:"keyword",status:"pending"}); clusterCoversAll(clusterRun())'), false);
 });
+
+test('import pagination renders every page without reducing the analysis input', () => {
+  const ui = app();
+  ui.run(`state.view="intake";
+    state.demands=Array.from({length:1005},(_,i)=>({id:String(i),original:"keyword-"+i,kind:"keyword",status:"pending"}));
+    state.preview={records:state.demands};`);
+  for (const size of [10,50,100]) {
+    const first = ui.run(`state.demandPageSize=${size};state.demandPages.intake=1;demandTable(state.preview.records)`);
+    assert.equal((first.match(/<td data-label="原始需求">/g)||[]).length, size);
+    assert.match(first, /共 1005 条/);
+    assert.match(first, /data-direction="prev"[^>]*disabled/);
+    const last = ui.run('state.demandPages.intake=9999; demandTable(state.preview.records)');
+    assert.equal((last.match(/<td data-label="原始需求">/g)||[]).length, 5);
+    assert.match(last, />keyword-1004<\/td>/);
+    assert.match(last, /data-direction="next"[^>]*disabled/);
+    assert.equal(ui.run('state.preview.records.length'), 1005);
+    assert.equal(ui.run('eligibleKeywords().length'), 1005);
+  }
+  assert.doesNotMatch(ui.run('demandTable([])'), /<td data-label="原始需求">/);
+  assert.match(ui.run('demandTable([])'), /显示 0–0 条 · 第 1 \/ 1 页/);
+});

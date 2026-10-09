@@ -213,3 +213,10 @@ dialog::backdrop { background: #1c253248; }
 .review-form details summary { cursor: pointer; color: var(--muted); }
 .review-form details input { margin-top: 10px; }
 .review-form [data-action="discard-review"] { display: block; margin-top: 8px; font-size: 12px; }
+
+.demand-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 16px 0; font-size: 13px; color: var(--muted); }
+.demand-pagination label,.pagination-actions { display: flex; align-items: center; gap: 8px; }
+.demand-pagination select { width: auto; padding: 8px 28px 8px 10px; }
+.pagination-actions { margin-left: auto; flex-wrap: wrap; }
+.pagination-actions button { padding: 8px 12px; font-size: 13px; }
+@media (max-width: 720px) { .pagination-actions { margin-left: 0; } }

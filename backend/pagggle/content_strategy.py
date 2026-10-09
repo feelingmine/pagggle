@@ -5,7 +5,7 @@ import re
 from collections import Counter, defaultdict
 from urllib.parse import unquote, urlsplit
 
-VERSION = "silicone-content-strategy-3"
+VERSION = "silicone-content-strategy-4"
 # Ordered objects: accessories before parent products, specific products before hubs.
 OBJECTS = [
     ("pet", "宠物硅胶用品", r"\b(?:pet|dog|cat)s?\b", "pet silicone products"),
@@ -146,6 +146,15 @@ def make_topics(seeds, rows):
     return topics, deferred
 
 
+def page_role(page):
+    path = urlsplit(page['url']).path.lower()
+    if path.startswith('/wp-content/') or re.search(r'\.(?:jpg|jpeg|png|gif|webp|svg|pdf|zip|mp4|ico|css|js|xml|json|txt)$',path):
+        return 'asset'
+    if path.startswith(('/tag/','/product-tag/','/category/','/author/')) or re.search(r'/page/\d+/?$',path):
+        return 'index'
+    return 'content'
+
+
 def page_object(page):
     path = unquote(urlsplit(page['url']).path).replace('-', ' ')
     # The most specific final URL segment avoids classifying every baby URL as the hub.
@@ -171,6 +180,7 @@ def evidence_lines(pages):
 
 
 def decide(topics, pages, competitors):
+    pages = [p for p in pages if page_role(p)=='content']
     lines = evidence_lines(pages)
     competitor_lines = evidence_lines(competitors)
     for topic in topics:
@@ -274,7 +284,9 @@ def build_result(snapshot):
         topic['brief'] = brief(topic)
     assigned = [key for topic in topics for key in topic['member_ids']]
     assert len(assigned)==len(set(assigned)) and set(assigned)|{r['id'] for r in deferred}=={r['id'] for r in rows}
+    webpages = [p for p in snapshot['pages'] if page_role(p)!='asset']
+    assets = [p for p in snapshot['pages'] if page_role(p)=='asset']
     return {"version":VERSION,"accounting":snapshot['accounting'],"expansions":expand(seeds,rows),"topics":topics,"deferred":deferred,
         "summary":{"topics":len(topics),"assigned":len(assigned),"deferred":len(deferred),"actions":dict(Counter(t['action'] for t in topics))},
-        "coverage":{"own_read":sum(p.get('status')=='read' for p in snapshot['pages']),"own_discovered":len(snapshot['pages']),"competitor_read":sum(p.get('status')=='read' for p in snapshot['competitors']),"competitor_total":len(snapshot['competitors'])},
-        "limits":["规则生成的内容主题尚未经过 SERP 同页验证。","URL 存在但未读正文时保留待核对；新增仅为候选。","按正文词项定位覆盖属于可复核检查，不是内容质量或转化保证。"]}
+        "coverage":{"own_read":sum(p.get('status')=='read' for p in webpages),"own_discovered":len(webpages),"asset_read":sum(p.get('status')=='read' for p in assets),"asset_total":len(assets),"index_pages":sum(page_role(p)=='index' for p in webpages),"competitor_read":sum(p.get('status')=='read' for p in snapshot['competitors']),"competitor_total":len(snapshot['competitors'])},
+        "limits":["图片/文档附件、标签、作者及分页索引不作为主题主目标页；其读取记录仍保留。","规则生成的内容主题尚未经过 SERP 同页验证。","URL 存在但未读正文时保留待核对；新增仅为候选。","按正文词项定位覆盖属于可复核检查，不是内容质量或转化保证。"]}

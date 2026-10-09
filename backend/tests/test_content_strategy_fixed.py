@@ -79,3 +79,18 @@ def test_url_task_precedes_marketing_title(frozen):
     for topic in build_result(frozen)['topics']:
         if topic['object']=='manufacturing' and topic['target_url']:
             assert '/kitchen-silicone-products/' not in topic['target_url']
+
+
+def test_real_assets_and_tag_indexes_are_not_topic_targets():
+    from pagggle.content_strategy import page_role
+    with sqlite3.connect(f"file:{ROOT / 'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        row=db.execute("SELECT input_json FROM content_runs WHERE project_id=? AND id=?",('3569ed46f2554178b327c2e7c58c8b3b','4eccef4cd190444d81bdd632d987a337')).fetchone()
+    assert row, 'Requires the actual first full-site run'
+    snapshot=json.loads(row[0]);pages={p['url']:p for p in snapshot['pages']}
+    assert any(page_role(p)=='asset' and p['status']=='read' for p in pages.values())
+    assert any(page_role(p)=='index' and p['status']=='read' for p in pages.values())
+    result=build_result(snapshot)
+    for t in result['topics']:
+        if t['target_url']:assert page_role(pages[t['target_url']])=='content'
+        assert all(page_role(pages[p['url']])=='content' for p in t['candidates'])
+    assert result['coverage']['own_discovered']+result['coverage']['asset_total']==len(pages)

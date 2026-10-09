@@ -91,6 +91,7 @@ def test_cancel_and_duplicate_active_run(fixed,monkeypatch):
 def test_all_discovered_accounts_for_every_page_and_reuses_read_sources(fixed,monkeypatch):
     from pagggle.content_workflow import collect_evidence
     from pagggle.crawl import CrawlError
+    from pagggle.content_strategy import page_role
     store,project,_,_=fixed
     settings=load_settings()
     config=settings.content_workflows[project['id']].model_copy(update={'own_scope':'all_discovered','evidence_concurrency':4})
@@ -116,6 +117,8 @@ def test_all_discovered_accounts_for_every_page_and_reuses_read_sources(fixed,mo
             assert by_url[url]['body']==page['body'] and url not in calls
         elif page['status']=='excluded':
             assert by_url[url]['status']=='excluded' and url not in calls
+        elif page_role(page)=='asset':
+            assert url not in calls and by_url[url]['status'] in {'excluded','read'}
         elif cached.get(url,{}).get('status')=='read':
             assert by_url[url]['body']==cached[url]['body'] and url not in calls
         else:

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .bulk_evidence import batch_evidence
 from .config import ROOT
-from .content_strategy import VERSION, build_result, consolidate, digest, parse_seeds
+from .content_strategy import VERSION, build_result, consolidate, digest, parse_seeds, page_role
 from .crawl import CrawlError, fetch_firecrawl, normalize_url, parse_html
 from .intake import parse_records
 from .store import encode, now, uid
@@ -68,6 +68,10 @@ def collect_evidence(store, project_id, config, settings, snapshot, checkpoint):
             completed += 1
             continue
         asset = existing if existing and existing['status']=='read' else cached.get(url)
+        if owner=='own' and config.own_scope=='all_discovered' and page_role({'url':url})=='asset':
+            place(asset if asset and asset.get('status')=='read' else {'url':url,'title':url,'body':'','status':'excluded','error':'非网页附件，未提取文字，不用于网页覆盖'},owner)
+            completed += 1
+            continue
         if asset and asset.get('status')=='read':
             place(asset,owner)
             completed += 1

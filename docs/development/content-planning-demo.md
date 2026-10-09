@@ -2,7 +2,7 @@
 
 ## Step 1：全量输入与确定性规则（2026-10-09）
 
-采用 content-strategy、seo-audit、site-architecture、b2b-inquiry-website 的相关方法，固化为版本化代码。主题按照产品对象与客户任务归集；主题不是已经通过 SERP 验证的独立页面。
+开发时参考 content-strategy、seo-audit、site-architecture、b2b-inquiry-website 文档，实际实现为手写规则；运行时没有调用这些 skill 或策略模型。主题按照产品对象与客户任务归集；主题不是已经通过 SERP 验证的独立页面。
 
 真实三份 XLSX：90,009 个原始记录，56,457 个独立关键词，33,549 条重复来源，3 条无效记录；基础词 14 个。冲突指标置为未知，保留原始观察。规则扩展检索短语与已测量关键词分开。
 
@@ -43,10 +43,14 @@ Chrome：网页按钮发起、阶段进度、主题详情及原文、优化建�
 
 当前程序没有调用 content-strategy 或其它营销 skill。实际路径是 content_workflow.work → content_strategy.build_result → 手写词典/正则/覆盖检查/大纲模板。开发时阅读技能文档不等于运行时执行技能；此前“组合使用 skill”的表述不准确。没有加载 SKILL.md 到模型提示词，没有策略模型调用，也没有 skill 执行日志。产品界面已明确标为规则初筛。
 
-用户随后授权读取全量本站正文再分析：扩展为 all_discovered 范围，保留上一版规则和同一批关键词；通过项目配置控制四个并发请求，已读内容复用、失败逐页记录。此次任务仍是补全证据后的规则覆盖复算，不称为 skill 分析。
+用户随后授权读取全量本站正文再分析：扩展为 all_discovered 范围，保留同一批关键词；项目配置请求四个并发，实际 Firecrawl 账户上限为两个并发，已读内容复用、失败逐页记录。此次任务仍是补全证据后的规则覆盖复算，不称为 skill 分析。
 
 ### 全量读取的传输验证
 
 逐页 scrape 接口实际返回 429（每分钟请求限额，Retry-After=30）；已取消这次运行，缓存成功页保留。全量模式改用 Firecrawl `/v2/batch/scrape`，服务端控制并发，本地跟随分页持续落库；请求仍限制为指定 URL 和固定 API 域名，限流按 Retry-After 等待，取消时请求终止远端批次。小批量验证使用真实的两篇牙胶文章，均保存有效正文；随后提交完整未读清单。没有升级服务套餐或购买额外额度。
 
 读取范围：`content_workflows.<project_id>.own_scope=all_discovered`；`evidence_concurrency=4` 仅控制服务端并发，不限制页数。配置留在 config.json。API 仍使用原项目，结果和补读证据按项目隔离。测试：真实库专项 3 passed（包含全清单覆盖/缓存复用/排除页保留/故障对账），采集回归 31 passed，既有后端 98 passed / 17 skipped，前端 5 passed。全站实际完成情况另记录，不能把传输验证当成全量完成。
+
+### 运行时调用链核对
+
+`content_workflow.py` 的 `work()` 调用 `build_result(frozen)`；`content_strategy.py` 中 `make_topics()` 使用产品对象/客户任务词典与正则，`decide()` 通过正文词项检查覆盖，`brief()` 使用预写模块生成建议与大纲。模块命名不表示加载或执行同名 skill。没有 skill 内容、版本或策略模型输入/输出的执行记录。确定性重放仅验证计算一致，不验证营销判断质量。

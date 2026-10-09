@@ -41,7 +41,7 @@ def batch_evidence(wanted, settings, concurrency, checkpoint, on_start):
                 except ValueError:raise CrawlError('批量采集响应无效') from None
         try:
             checkpoint(f'2/5 提交 {len(owners)} 个未读页面至批量采集队列')
-            created=request('POST',API,json={'urls':list(owners),'formats':['rawHtml'],'onlyMainContent':False,'maxConcurrency':concurrency,'timeout':settings.scrape_timeout_seconds*1000})
+            created=request('POST',API,json={'urls':list(owners),'formats':['rawHtml'],'onlyMainContent':False,'maxAge':0,'maxConcurrency':concurrency,'timeout':settings.scrape_timeout_seconds*1000})
             if not created.get('success'):
                 raise CrawlError('批量采集任务创建失败')
             batch_id=str(UUID(created['id']))

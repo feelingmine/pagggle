@@ -215,3 +215,35 @@ def test_actual_incomplete_assignment_keeps_unique_results_and_retries_ambiguous
         assert set(ids).isdisjoint(unresolved)
         assert set(ids)|unresolved==expected
         assert unresolved
+
+
+def test_actual_failed_responses_receive_specific_field_and_allowed_seed_feedback():
+    from pydantic import ValidationError
+    from pagggle.skill_execution import validation_feedback
+    from pagggle.skill_strategy import Assignments, validate_assignments
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        records=[json.loads(row[0]) for row in db.execute(
+            "SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND stage='keyword_assignment' AND json_extract(payload,'$.status')='failed'",
+            (PID,'65e64cfefcc94d24a6cc81ee5564baa1'))]
+    if not records:pytest.skip('Requires actual failed recovery responses')
+    fields=seed_errors=0
+    for record in records:
+        context=json.loads(record['request']['messages'][1]['content'])
+        ids={r['i'] for r in context['items']}
+        seeds={s['keyword'] for s in context['business']['seeds']}
+        taxonomy={t['id'] for t in context['catalog']}
+        for attempt in record['attempts']:
+            try:parsed=Assignments.model_validate_json(attempt['content'])
+            except ValidationError as error:
+                feedback=validation_feedback(error)
+                for item in error.errors():
+                    assert '.'.join(map(str,item['loc'])) in feedback
+                    assert item['msg'] in feedback
+                fields+=1
+                continue
+            if any(g.seed not in seeds for g in parsed.groups):
+                with pytest.raises(ValueError) as error:validate_assignments(parsed,ids,taxonomy,seeds)
+                if '主题基础词' in str(error.value):
+                    assert all(seed in validation_feedback(error.value) for seed in seeds)
+                    seed_errors+=1
+    assert fields and seed_errors

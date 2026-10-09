@@ -18,6 +18,13 @@ class SkillOutputError(ValueError):
     """A returned model response cannot be accepted; callers may split their input."""
 
 
+def validation_feedback(error):
+    if not isinstance(error,ValidationError):
+        return str(error)
+    return '输出结构不符合 schema：'+'；'.join(
+        '.'.join(map(str,item['loc']))+': '+item['msg'] for item in error.errors(include_input=False,include_url=False))
+
+
 def load_skills(settings):
     result = {}
     for name in ('content-strategy', 'seo-audit'):
@@ -109,7 +116,7 @@ class SkillExecution:
                     except (ValueError, ValidationError) as error:
                         if attempt==2:
                             raise SkillOutputError(f'{stage} 三次输出未通过结构、完整性或引用校验，未保存部分分析') from None
-                        feedback='输出结构不符合 schema' if isinstance(error,ValidationError) else str(error)
+                        feedback=validation_feedback(error)
                         request={**request,'messages':request['messages']+[
                             {'role':'assistant','content':content},
                             {'role':'user','content':feedback+'。严格核对 schema、全部输入编号恰好一次、合法关联 ID，以及 quote 必须逐字来自输入原文。返回完整修正 JSON。'}]}

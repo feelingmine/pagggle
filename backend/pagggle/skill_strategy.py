@@ -141,6 +141,18 @@ def unique_assignments(output, expected):
     return accepted,set(expected)-unique
 
 
+def validate_assignments(value, ids, taxonomy, seeds):
+    unexpected={i for g in [*value.groups,*value.deferred] for i in g.members}-ids
+    if unexpected:
+        raise ValueError(f'输出包含本批输入之外的编号：{sorted(unexpected)}，请删除这些编号')
+    for g in value.groups:
+        if g.topic_id and g.topic_id not in taxonomy:
+            raise ValueError(f'未知目录主题 {g.topic_id}；新主题使用 0，已有主题使用输入 catalog 的 id')
+        if g.seed not in seeds:
+            raise ValueError('主题基础词不属于本轮输入。seed 必须逐字选择以下一个值：'+
+                json.dumps(sorted(seeds),ensure_ascii=False)+'。不能把某个输入关键词当成新基础词；没有业务关联的成员进入 deferred')
+
+
 def pack(items, budget, base=None, limit=None):
     """Bound requests by serialized size without dropping an item or limiting total input."""
     batches, current = [], []
@@ -339,13 +351,7 @@ def execute_strategy(snapshot, execution, settings, checkpoint):
         for attempt in range(4):
             ids={r['i'] for r in remaining}
             def validate(value):
-                if {i for g in [*value.groups,*value.deferred] for i in g.members}-ids:
-                    raise ValueError('输出包含本批输入之外的编号')
-                for g in value.groups:
-                    if g.topic_id and g.topic_id not in taxonomy:
-                        raise ValueError('未知目录主题')
-                    if g.seed not in seeds:
-                        raise ValueError('主题基础词不属于本轮输入')
+                validate_assignments(value,ids,taxonomy,seeds)
             try:
                 output=execution.call('keyword_assignment',{**base,'items':remaining,**({'retry_unresolved':attempt} if attempt else {})},Assignments,instruction,validate)
             except SkillOutputError:

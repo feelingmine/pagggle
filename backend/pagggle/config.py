@@ -12,6 +12,8 @@ class ContentWorkflowSettings(BaseModel):
     keyword_files: list[str]
     competitor_urls: list[str]
     own_evidence_urls: list[str] = Field(default_factory=list)
+    own_scope: Literal["selected", "all_discovered"] = "selected"
+    evidence_concurrency: int = Field(default=4, ge=1, le=8)
     market: str = "us"
     language: str = "en"
 

@@ -37,3 +37,16 @@ Chrome：网页按钮发起、阶段进度、主题详情及原文、优化建�
 原库与 `data/backups/before-content-plan-20261009T170058.sqlite3` 比较，projects、sources、profiles、seed_keyword_runs、seed_keyword_revisions、demands、intake_batches、cluster_runs、keyword_onboarding 的内容哈希全相同；完整性 ok、外键无错误。测试报告/快照/HTML/备份均位于忽略的 data/，不入公开 Git。
 
 边界：这是硅胶行业的确定性规则 Demo，不是通用语义聚类或自动发布系统。大量词仍需人工归类/业务核对；正文覆盖规则只能支持可复核初筛。竞品研究覆盖选定页面，未读取全站；新增候选需继续检查 SERP 与全文相似内容。
+
+
+## 方法澄清（用户追问后，2026-10-09）
+
+当前程序没有调用 content-strategy 或其它营销 skill。实际路径是 content_workflow.work → content_strategy.build_result → 手写词典/正则/覆盖检查/大纲模板。开发时阅读技能文档不等于运行时执行技能；此前“组合使用 skill”的表述不准确。没有加载 SKILL.md 到模型提示词，没有策略模型调用，也没有 skill 执行日志。产品界面已明确标为规则初筛。
+
+用户随后授权读取全量本站正文再分析：扩展为 all_discovered 范围，保留上一版规则和同一批关键词；通过项目配置控制四个并发请求，已读内容复用、失败逐页记录。此次任务仍是补全证据后的规则覆盖复算，不称为 skill 分析。
+
+### 全量读取的传输验证
+
+逐页 scrape 接口实际返回 429（每分钟请求限额，Retry-After=30）；已取消这次运行，缓存成功页保留。全量模式改用 Firecrawl `/v2/batch/scrape`，服务端控制并发，本地跟随分页持续落库；请求仍限制为指定 URL 和固定 API 域名，限流按 Retry-After 等待，取消时请求终止远端批次。小批量验证使用真实的两篇牙胶文章，均保存有效正文；随后提交完整未读清单。没有升级服务套餐或购买额外额度。
+
+读取范围：`content_workflows.<project_id>.own_scope=all_discovered`；`evidence_concurrency=4` 仅控制服务端并发，不限制页数。配置留在 config.json。API 仍使用原项目，结果和补读证据按项目隔离。测试：真实库专项 3 passed（包含全清单覆盖/缓存复用/排除页保留/故障对账），采集回归 31 passed，既有后端 98 passed / 17 skipped，前端 5 passed。全站实际完成情况另记录，不能把传输验证当成全量完成。

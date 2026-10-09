@@ -9,6 +9,7 @@ from fastapi import Query
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from .bulk_evidence import batch_evidence
 from .config import ROOT
 from .content_strategy import VERSION, build_result, consolidate, digest, parse_seeds
 from .crawl import CrawlError, fetch_firecrawl, normalize_url, parse_html
@@ -48,35 +49,64 @@ def collect_evidence(store, project_id, config, settings, snapshot, checkpoint):
     with store.connect() as db:
         cached = {r['url']:json.loads(r['payload']) for r in db.execute('SELECT url,payload FROM content_assets WHERE project_id=?',(project_id,))}
     own_host = urlsplit(snapshot['project']['site_url']).hostname
-    wanted = [(url,'own') for url in config.own_evidence_urls] + [(url,'competitor') for url in config.competitor_urls]
-    competitors = []
-    for index, (url, owner) in enumerate(wanted,1):
-        url = normalize_url(url)
-        checkpoint(f'2/5 核对页面证据 {index}/{len(wanted)}：{urlsplit(url).hostname}')
+    own_urls = sorted(set(config.own_evidence_urls) | (set(pages) if config.own_scope=='all_discovered' else set()))
+    wanted = [(normalize_url(url),'own') for url in own_urls] + [(normalize_url(url),'competitor') for url in config.competitor_urls]
+    competitors, pending = [], []
+    completed = 0
+
+    def place(asset, owner):
+        if owner=='own':
+            pages[asset['url']] = asset
+        else:
+            competitors.append(asset)
+
+    for url, owner in wanted:
         if owner=='own' and urlsplit(url).hostname != own_host:
             raise ValueError('本站补充页面必须属于项目网站')
         existing = pages.get(url) if owner=='own' else None
         if existing and existing['status']=='excluded':
+            completed += 1
             continue
         asset = existing if existing and existing['status']=='read' else cached.get(url)
-        if not asset or asset.get('status')!='read':
-            try:
-                final, _, raw = fetch_firecrawl(url,settings,allowed_host=urlsplit(url).hostname)
-                title, body, _ = parse_html(raw,final)
-                if not body.strip():
-                    raise ValueError('页面正文为空')
-                asset = {'url':url,'title':title,'body':body,'status':'read','owner':owner,'fetched_at':now(),'sha256':hashlib.sha256(raw).hexdigest()}
-            except Exception as error:
-                # Provider exceptions can contain credential-bearing request details.
-                message = str(error) if isinstance(error,CrawlError) else '本页采集失败，保留待核对；可在新运行中重试'
-                asset = {'url':url,'title':url,'body':'','status':'failed','owner':owner,'fetched_at':now(),'error':message}
-            checkpoint(f'2/5 已处理页面 {index}/{len(wanted)}')
-            with store.connect() as db:
-                db.execute('INSERT OR REPLACE INTO content_assets VALUES (?,?,?)',(project_id,url,encode(asset)))
-        if owner=='own':
-            pages[url] = asset
+        if asset and asset.get('status')=='read':
+            place(asset,owner)
+            completed += 1
         else:
-            competitors.append(asset)
+            pending.append((url,owner))
+    checkpoint(f'2/5 页面证据 {completed}/{len(wanted)}：复用已有正文，待读取 {len(pending)} 页')
+
+    def scrape(url, owner):
+        try:
+            final, content_type, raw = fetch_firecrawl(url,settings,allowed_host=urlsplit(url).hostname)
+            if 'html' not in content_type.lower():
+                raise CrawlError('不是 HTML 正文页面')
+            title, body, links = parse_html(raw,final)
+            if len(body.strip())<40:
+                raise CrawlError('可读取正文不足，保留待核对')
+            return {'url':url,'title':title,'body':body,'status':'read','owner':owner,'fetched_at':now(),'sha256':hashlib.sha256(raw).hexdigest(),'links':links}
+        except Exception as error:
+            message = str(error) if isinstance(error,CrawlError) else '本页采集失败，保留待核对；可在新运行中重试'
+            return {'url':url,'title':url,'body':'','status':'failed','owner':owner,'fetched_at':now(),'error':message}
+
+    if pending and config.own_scope=='all_discovered':
+        def started(batch_id):
+            with store.connect() as db:
+                store.event(db,project_id,'content_evidence_batch_started',{'batch_id':batch_id,'urls':[u for u,_ in pending]})
+        for asset in batch_evidence(pending,settings,config.evidence_concurrency,checkpoint,started):
+            with store.connect() as db:
+                db.execute('INSERT OR REPLACE INTO content_assets VALUES (?,?,?)',(project_id,asset['url'],encode(asset)))
+            place(asset,asset['owner'])
+        return sorted(pages.values(),key=lambda p:p['url']), sorted(competitors,key=lambda p:p['url'])
+
+    for url, owner in pending:
+        checkpoint(f'2/5 页面证据 {completed}/{len(wanted)}：正在补齐正文')
+        asset = scrape(url,owner)
+        checkpoint(f'2/5 页面证据 {completed+1}/{len(wanted)}：已处理页面')
+        with store.connect() as db:
+            db.execute('INSERT OR REPLACE INTO content_assets VALUES (?,?,?)',(project_id,url,encode(asset)))
+        place(asset,owner)
+        completed += 1
+
     return sorted(pages.values(),key=lambda p:p['url']), sorted(competitors,key=lambda p:p['url'])
 
 
@@ -162,7 +192,7 @@ def register_content_workflow(app, store, settings):
             ids = [r['id'] for r in db.execute('SELECT id FROM content_runs WHERE project_id=? ORDER BY created_at DESC',(project_id,))]
         return {'current_version':VERSION,'configured':bool(config),'files':[{'name':Path(p).name,'bytes':local_file(p).stat().st_size} for p in config.keyword_files] if config else [],
                 'seed_file':Path(config.seed_file).name if config else None,'market':config.market if config else None,'language':config.language if config else None,
-                'competitor_urls':config.competitor_urls if config else [],'own_evidence_urls':config.own_evidence_urls if config else [],'runs':[run_for(project_id,i) for i in ids]}
+                'competitor_urls':config.competitor_urls if config else [],'own_scope':config.own_scope if config else 'selected','own_evidence_urls':config.own_evidence_urls if config else [],'runs':[run_for(project_id,i) for i in ids]}
 
     @app.post(prefix)
     def create(project_id: str, data: PlanInput):

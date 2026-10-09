@@ -86,3 +86,40 @@ def test_cancel_and_duplicate_active_run(fixed,monkeypatch):
         actual=wait(client,base,created['id'])
         assert actual['status']=='cancelled' and actual['result_hash'] is None
         assert client.get(base+'/'+created['id']+'/export').status_code==409
+
+
+def test_all_discovered_accounts_for_every_page_and_reuses_read_sources(fixed,monkeypatch):
+    from pagggle.content_workflow import collect_evidence
+    from pagggle.crawl import CrawlError
+    store,project,_,_=fixed
+    settings=load_settings()
+    config=settings.content_workflows[project['id']].model_copy(update={'own_scope':'all_discovered','evidence_concurrency':4})
+    snapshot=store.snapshot(project['id'])
+    with store.connect() as db:
+        cached={r['url']:json.loads(r['payload']) for r in db.execute('SELECT url,payload FROM content_assets WHERE project_id=?',(project['id'],))}
+    calls=[]
+    def unavailable(url,*args,**kwargs):
+        calls.append(url)
+        raise CrawlError('验证：模拟网络中断，不生成替代正文')
+    monkeypatch.setattr('pagggle.content_workflow.fetch_firecrawl',unavailable)
+    def failed_batch(wanted,*args):
+        for url,owner in wanted:
+            calls.append(url)
+            yield {'url':url,'owner':owner,'status':'failed','body':'','title':url,'error':'验证：模拟网络中断'}
+    monkeypatch.setattr('pagggle.content_workflow.batch_evidence',failed_batch)
+    pages,competitors=collect_evidence(store,project['id'],config,settings,snapshot,lambda message:None)
+    by_url={p['url']:p for p in pages}
+    originals={p['url']:p for p in snapshot['sources'] if p['kind']=='page'}
+    assert set(originals)<=set(by_url)
+    for url,page in originals.items():
+        if page['status']=='read':
+            assert by_url[url]['body']==page['body'] and url not in calls
+        elif page['status']=='excluded':
+            assert by_url[url]['status']=='excluded' and url not in calls
+        elif cached.get(url,{}).get('status')=='read':
+            assert by_url[url]['body']==cached[url]['body'] and url not in calls
+        else:
+            assert url in calls and by_url[url]['status']=='failed'
+    assert len(calls)==len(set(calls))
+    assert len(competitors)==len(config.competitor_urls)
+    assert store.snapshot(project['id'])['sources']==snapshot['sources']

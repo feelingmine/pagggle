@@ -2,7 +2,7 @@
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const labels = {business:"供货与定制",product:"核心产品",capability:"能力边界",scenario:"客户场景",market:"目标市场",case:"案例与产品",tone:"内容基调",contact:"询盘路径",stated:"原文陈述",inferred:"推断待核对",pending:"待确认",conflict:"来源冲突",confirmed:"企业已确认",read:"已读取",failed:"未成功读取",uncovered:"尚未覆盖",excluded:"已排除",keyword:"关键词",customer_question:"客户问题",product_change:"产品变化"};
-const state = {id:"",data:null,projects:[],view:"start",startDraft:null,startDirty:false,starting:false,selectedPageIds:new Set(),pageQuery:"",sitemapFilter:"",selectionLimit:undefined,selectedFact:null,historyVersion:null,demands:[],intents:[],clusterData:null,clusterVersion:null,clusterQuery:"",clusterStatus:"",selectedGroupIds:new Set(),selectionRun:null,skipGroups:false,intakeFileName:"",intakeKind:"keyword",intakeFormat:"lines",intakeText:"",intakeMarket:"中东",intakeLanguage:"en",showOriginal:false,preview:null,pendingImport:null,reviewDirty:false,modalDirty:false,poll:null,generation:0};
+const state = {id:"",data:null,projects:[],view:"start",startDraft:null,startDirty:false,starting:false,selectedPageIds:new Set(),pageQuery:"",sitemapFilter:"",selectionLimit:undefined,selectedFact:null,historyVersion:null,demands:[],intents:[],clusterData:null,clusterVersion:null,clusterQuery:"",clusterStatus:"",selectedGroupIds:new Set(),selectionRun:null,skipGroups:false,intakeFileName:"",intakeKind:"keyword",intakeFormat:"lines",intakeText:"",intakeMarket:"",intakeLanguage:"en",showOriginal:false,preview:null,pendingImport:null,reviewDirty:false,modalDirty:false,poll:null,generation:0};
 async function api(path,data) {
   const response=await fetch("/api"+path,data===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
   const result=await response.json();if(!response.ok)throw new Error(result.detail||"暂时无法完成，请重试");return result;
@@ -211,27 +211,156 @@ function updateGroupSelection(){
 function showCluster(id){
   const group=clusterRun()?.payload.groups.find(g=>g.target_page_id===id);if(!group)return;
   const names=Object.fromEntries(group.members.map(m=>[m.demand_id,m.keyword])),context=group.context;
-  modal("候选组成员与依据",`<h3>${esc(group.members[0].keyword)}</h3><p class="form-help">${esc(context.market||"市场未知")} · ${esc(context.language||"语言未知")} · ${esc(context.device||"设备未知")}<br>${esc(context.serp_source||"来源未知")} · ${esc(context.serp_date||"日期未知")}</p>${group.reasons.map(r=>`<p class="coverage-note">${esc(r)}</p>`).join("")}${group.primary_provisional?'<p class="form-help">存在缺失指标，主词仅作暂定排序。</p>':""}${group.members.map(m=>`<section class="source-row"><header><h3>${esc(m.keyword)}</h3>${badge("",m.keyword_role==="Primary"?"主关键词":"次关键词")}</header><p>搜索量 ${m.volume??"未知"} · KD ${m.kd??"未知"}</p><details><summary>自然搜索结果 ${m.serp?.length??0} 条${!m.serp?"（未提供）":""}</summary><ol class="serp-urls">${(m.serp||[]).map(url=>`<li>${esc(url)}</li>`).join("")}</ol></details></section>`).join("")}${group.pair_evidence.length?`<details class="cluster-method"><summary>查看成员间重合依据</summary>${group.pair_evidence.map(p=>`<section class="source-row"><p>${esc(names[p.left_id])} ↔ ${esc(names[p.right_id])}</p><p>相同 URL：${p.overlap} 个</p><ul class="serp-urls">${p.shared_urls.map(url=>`<li>${esc(url)}</li>`).join("")}</ul></section>`).join("")}</details>`:'<p class="form-help">当前只有一个成员；单词可保留为候选，不代表已确认单独建页。</p>'}`,null);
+  modal("候选组成员与依据",`<h3>${esc(group.members[0].keyword)}</h3><p class="form-help">${esc(marketOptions.find(([key])=>key===context.market)?.[1]||context.market||"市场未知")} · ${esc(context.language||"语言未知")} · ${esc(context.device||"设备未知")}<br>${esc(context.serp_source||"来源未知")} · ${esc(context.serp_date||"日期未知")}</p>${group.reasons.map(r=>`<p class="coverage-note">${esc(r)}</p>`).join("")}${group.primary_provisional?'<p class="form-help">存在缺失指标，主词仅作暂定排序。</p>':""}${group.members.map(m=>`<section class="source-row"><header><h3>${esc(m.keyword)}</h3>${badge("",m.keyword_role==="Primary"?"主关键词":"次关键词")}</header><p>搜索量 ${m.volume??"未知"} · KD ${m.kd??"未知"}</p><details><summary>自然搜索结果 ${m.serp?.length??0} 条${!m.serp?"（未提供）":""}</summary><ol class="serp-urls">${(m.serp||[]).map(url=>`<li>${esc(url)}</li>`).join("")}</ol></details></section>`).join("")}${group.pair_evidence.length?`<details class="cluster-method"><summary>查看成员间重合依据</summary>${group.pair_evidence.map(p=>`<section class="source-row"><p>${esc(names[p.left_id])} ↔ ${esc(names[p.right_id])}</p><p>相同 URL：${p.overlap} 个</p><ul class="serp-urls">${p.shared_urls.map(url=>`<li>${esc(url)}</li>`).join("")}</ul></section>`).join("")}</details>`:'<p class="form-help">当前只有一个成员；单词可保留为候选，不代表已确认单独建页。</p>'}`,null);
 }
 function showIntent(id){
   const result=state.intents.find(i=>i.demand_id===id),record=state.demands.find(r=>r.id===id);if(!result||!record)return;
   const data=result.payload,fieldNames={object:"对象",scenario:"场景",main_task:"主要任务",customer_question:"客户问题",decision_required:"待完成判断",answers_needed:"所需答案"};
   modal("需求意图",`<h3>${esc(record.original)}</h3><p class="form-help">依据业务理解 v${result.profile_version} · ${esc(intentLabels[result.status])}</p>${result.profile_version!==latest()?.version?'<p class="inline-error">业务理解已更新；此结果保留原版本依据，需要重新复核。</p>':""}${result.error?`<p class="inline-error">${esc(result.error)}</p>`:""}${data?`<p>${esc(data.reason)}</p><p>企业适配：${esc({fit:"适配",not_fit:"不适配",unknown:"未知"}[data.business_fit.status])} · ${esc(data.business_fit.reason)}</p>${data.candidates.map((c,index)=>`<section class="source-row"><h3>候选 ${index+1} · ${esc(taskLabels[c.main_task])}</h3><p>对象：${esc(c.object||"未知")}<br>场景：${esc(c.scenario||"未知")}</p><p><strong>客户问题</strong><br>${esc(c.customer_question)}</p><p><strong>待完成判断</strong><br>${esc(c.decision_required)}</p><p><strong>明确条件</strong><br>${c.explicit_conditions.map(x=>`${esc(x.text)} — 原词「${esc(x.quote)}」`).join("<br>")||"未明示"}</p><p><strong>所需答案</strong><br>${c.answers_needed.map(esc).join("<br>")}</p><p><strong>原词依据</strong><br>${c.evidence.map(esc).join(" · ")}</p><p class="form-help">推断字段：${c.inferred_fields.map(x=>fieldNames[x]).join("、")||"无"}<br>不确定项：${c.uncertainties.map(esc).join("；")||"模型未列出，仍需人工核对"}</p></section>`).join("")}`:""}`,null);
 }
-const marketOptions=["中东","东南亚","欧洲","北美","南美","非洲","东亚"].map(value=>[value,value]);
-const languageOptions=[["en","英语"],["ru","俄语"],["de","德语"],["es","西班牙语"],["fr","法语"],["zh","汉语"],["ja","日语"],["ko","韩语"]];
+// Semrush SEO API desktop keyword databases, verified 2026-10-09. See docs/development/semrush-market-language.md.
+const marketOptions=[
+  ["us","美国 · US","United States"],
+  ["uk","英国 · UK","United Kingdom"],
+  ["ca","加拿大 · CA","Canada"],
+  ["ru","俄罗斯 · RU","Russia"],
+  ["de","德国 · DE","Germany"],
+  ["fr","法国 · FR","France"],
+  ["es","西班牙 · ES","Spain"],
+  ["it","意大利 · IT","Italy"],
+  ["br","巴西 · BR","Brazil"],
+  ["au","澳大利亚 · AU","Australia"],
+  ["ar","阿根廷 · AR","Argentina"],
+  ["be","比利时 · BE","Belgium"],
+  ["ch","瑞士 · CH","Switzerland"],
+  ["dk","丹麦 · DK","Denmark"],
+  ["fi","芬兰 · FI","Finland"],
+  ["hk","中国香港特别行政区 · HK","Hong Kong"],
+  ["ie","爱尔兰 · IE","Ireland"],
+  ["il","以色列 · IL","Israel"],
+  ["mx","墨西哥 · MX","Mexico"],
+  ["nl","荷兰 · NL","Netherlands"],
+  ["no","挪威 · NO","Norway"],
+  ["pl","波兰 · PL","Poland"],
+  ["se","瑞典 · SE","Sweden"],
+  ["sg","新加坡 · SG","Singapore"],
+  ["tr","土耳其 · TR","Turkey"],
+  ["jp","日本 · JP","Japan"],
+  ["in","印度 · IN","India"],
+  ["hu","匈牙利 · HU","Hungary"],
+  ["af","阿富汗 · AF","Afghanistan"],
+  ["al","阿尔巴尼亚 · AL","Albania"],
+  ["dz","阿尔及利亚 · DZ","Algeria"],
+  ["ao","安哥拉 · AO","Angola"],
+  ["am","亚美尼亚 · AM","Armenia"],
+  ["at","奥地利 · AT","Austria"],
+  ["az","阿塞拜疆 · AZ","Azerbaijan"],
+  ["bh","巴林 · BH","Bahrain"],
+  ["bd","孟加拉国 · BD","Bangladesh"],
+  ["by","白俄罗斯 · BY","Belarus"],
+  ["bz","伯利兹 · BZ","Belize"],
+  ["bo","玻利维亚 · BO","Bolivia"],
+  ["ba","波斯尼亚和黑塞哥维那 · BA","Bosnia and Herzegovina"],
+  ["bw","博茨瓦纳 · BW","Botswana"],
+  ["bn","文莱 · BN","Brunei"],
+  ["bg","保加利亚 · BG","Bulgaria"],
+  ["cv","佛得角 · CV","Cabo Verde"],
+  ["kh","柬埔寨 · KH","Cambodia"],
+  ["cm","喀麦隆 · CM","Cameroon"],
+  ["cl","智利 · CL","Chile"],
+  ["co","哥伦比亚 · CO","Colombia"],
+  ["cr","哥斯达黎加 · CR","Costa Rica"],
+  ["hr","克罗地亚 · HR","Croatia"],
+  ["cy","塞浦路斯 · CY","Cyprus"],
+  ["cz","捷克 · CZ","Czech Republic"],
+  ["cd","刚果（金） · CD","Congo"],
+  ["do","多米尼加共和国 · DO","Dominican Republic"],
+  ["ec","厄瓜多尔 · EC","Ecuador"],
+  ["eg","埃及 · EG","Egypt"],
+  ["sv","萨尔瓦多 · SV","El Salvador"],
+  ["ee","爱沙尼亚 · EE","Estonia"],
+  ["et","埃塞俄比亚 · ET","Ethiopia"],
+  ["ge","格鲁吉亚 · GE","Georgia"],
+  ["gh","加纳 · GH","Ghana"],
+  ["gr","希腊 · GR","Greece"],
+  ["gt","危地马拉 · GT","Guatemala"],
+  ["gy","圭亚那 · GY","Guyana"],
+  ["ht","海地 · HT","Haiti"],
+  ["hn","洪都拉斯 · HN","Honduras"],
+  ["is","冰岛 · IS","Iceland"],
+  ["id","印度尼西亚 · ID","Indonesia"],
+  ["jm","牙买加 · JM","Jamaica"],
+  ["jo","约旦 · JO","Jordan"],
+  ["kz","哈萨克斯坦 · KZ","Kazakhstan"],
+  ["kw","科威特 · KW","Kuwait"],
+  ["lv","拉脱维亚 · LV","Latvia"],
+  ["lb","黎巴嫩 · LB","Lebanon"],
+  ["lt","立陶宛 · LT","Lithuania"],
+  ["lu","卢森堡 · LU","Luxembourg"],
+  ["mg","马达加斯加 · MG","Madagascar"],
+  ["my","马来西亚 · MY","Malaysia"],
+  ["mt","马耳他 · MT","Malta"],
+  ["mu","毛里求斯 · MU","Mauritius"],
+  ["md","摩尔多瓦 · MD","Moldova"],
+  ["mn","蒙古 · MN","Mongolia"],
+  ["me","黑山 · ME","Montenegro"],
+  ["ma","摩洛哥 · MA","Morocco"],
+  ["mz","莫桑比克 · MZ","Mozambique"],
+  ["na","纳米比亚 · NA","Namibia"],
+  ["np","尼泊尔 · NP","Nepal"],
+  ["nz","新西兰 · NZ","New Zealand"],
+  ["ni","尼加拉瓜 · NI","Nicaragua"],
+  ["ng","尼日利亚 · NG","Nigeria"],
+  ["om","阿曼 · OM","Oman"],
+  ["py","巴拉圭 · PY","Paraguay"],
+  ["pe","秘鲁 · PE","Peru"],
+  ["ph","菲律宾 · PH","Philippines"],
+  ["pt","葡萄牙 · PT","Portugal"],
+  ["ro","罗马尼亚 · RO","Romania"],
+  ["sa","沙特阿拉伯 · SA","Saudi Arabia"],
+  ["sn","塞内加尔 · SN","Senegal"],
+  ["rs","塞尔维亚 · RS","Serbia"],
+  ["sk","斯洛伐克 · SK","Slovakia"],
+  ["si","斯洛文尼亚 · SI","Slovenia"],
+  ["za","南非 · ZA","South Africa"],
+  ["kr","韩国 · KR","South Korea"],
+  ["lk","斯里兰卡 · LK","Sri Lanka"],
+  ["th","泰国 · TH","Thailand"],
+  ["bs","巴哈马 · BS","Bahamas"],
+  ["tt","特立尼达和多巴哥 · TT","Trinidad and Tobago"],
+  ["tn","突尼斯 · TN","Tunisia"],
+  ["ua","乌克兰 · UA","Ukraine"],
+  ["ae","阿拉伯联合酋长国 · AE","United Arab Emirates"],
+  ["uy","乌拉圭 · UY","Uruguay"],
+  ["ve","委内瑞拉 · VE","Venezuela"],
+  ["vn","越南 · VN","Vietnam"],
+  ["zm","赞比亚 · ZM","Zambia"],
+  ["zw","津巴布韦 · ZW","Zimbabwe"],
+  ["ly","利比亚 · LY","Libya"],
+  ["pa","巴拿马 · PA","Panama"],
+  ["pk","巴基斯坦 · PK","Pakistan"],
+  ["tw","台湾 · TW","Taiwan"],
+  ["qa","卡塔尔 · QA","Qatar"]
+];
+// Languages are independent of country databases; these are Pagggle's common choices, not an official availability matrix.
+const languageOptions=[["en","英语"],["ar","阿拉伯语"],["ru","俄语"],["de","德语"],["es","西班牙语"],["fr","法语"],["zh","汉语"],["ja","日语"],["ko","韩语"],["pt","葡萄牙语"],["it","意大利语"],["nl","荷兰语"],["tr","土耳其语"],["pl","波兰语"],["sv","瑞典语"],["da","丹麦语"],["no","挪威语"],["fi","芬兰语"],["cs","捷克语"],["ro","罗马尼亚语"],["el","希腊语"],["hu","匈牙利语"],["uk","乌克兰语"],["he","希伯来语"],["hi","印地语"],["bn","孟加拉语"],["ur","乌尔都语"],["id","印度尼西亚语"],["ms","马来语"],["th","泰语"],["vi","越南语"],["tl","菲律宾语"]];
+function scopeOptions(name,value,options,query=""){
+  const custom=!!value&&!options.some(([key])=>key===value),needle=query.trim().toLocaleLowerCase();
+  return (name==="market"?`<option value="" ${!value?"selected":""}>请选择国家/地区</option>`:"")+options.filter(option=>option[0]===value||option.join(" ").toLocaleLowerCase().includes(needle)).map(([key,text])=>`<option value="${key}" ${value===key?"selected":""}>${text}</option>`).join("")+`<option value="other" ${custom?"selected":""}>${name==="market"?"其它国家/地区（手动填写）":"其它语言（手动填写）"}</option>`;
+}
 function intakeSelect(name,label,value,options){
-  const custom=!options.some(([key])=>key===value);
-  return `<div><label class="field"><span>${label}</span><select name="${name}" data-scope-select="${name}">${options.map(([key,text])=>`<option value="${key}" ${value===key?"selected":""}>${text}</option>`).join("")}<option value="other" ${custom?"selected":""}>其它</option></select></label><label class="field" id="${name}-custom-field" ${custom?"":"hidden"}><span>具体${label}</span><input name="${name}_custom" maxlength="100" value="${custom?esc(value):""}" ${custom?"required":"disabled"}></label></div>`;
+  const custom=!!value&&!options.some(([key])=>key===value);
+  return `<div><label class="field"><span>${label}</span><select name="${name}" required data-scope-select="${name}">${scopeOptions(name,value,options)}</select></label><label class="field" id="${name}-custom-field" ${custom?"":"hidden"}><span>具体${label}</span><input name="${name}_custom" maxlength="100" value="${custom?esc(value):""}" ${custom?"required":"disabled"}></label></div>`;
 }
 function rememberIntake(){const form=$("#intake-form");if(!form)return;const data=new FormData(form);if(state.intakeFormat!=="xlsx"||state.intakeKind!=="keyword")state.intakeText=String(data.get("text")||"");state.intakeMarket=String(data.get("market")==="other"?data.get("market_custom")||"":data.get("market")||"").trim();state.intakeLanguage=String(data.get("language")==="other"?data.get("language_custom")||"":data.get("language")||"").trim();}
 function renderIntake(){
   const first=initialKeywordJourney();if(first)state.intakeKind="keyword";
   let html=breadcrumb(first?"导入关键词":"添加内容需求")+`<div class="content-page">${first?keywordJourney(1):""}<div class="page-title"><div><h1>${state.preview?"检查导入结果":first?"导入你的关键词表":`添加${labels[state.intakeKind]}`}</h1><p>${state.preview?"每条输入都有处理结果。确认后保存到当前项目。":first?"先导入一批关键词，随后分析全部有效词并筛选结果。":"保留真实问题或变化及上下文，作为后续内容规划的输入。"}</p></div>${first?"":'<a class="accent-link" href="#demands">返回需求列表</a>'}</div>`;
   if(state.preview){const counts=state.preview.summary;html+=`<div class="summary-line"><span>输入 <strong>${counts.input}</strong> 条</span><span>有效 ${counts.valid} 条</span><span>重复 ${counts.duplicate} 条</span><span>失败 ${counts.failed} 条</span></div>${demandTable(state.preview.records)}<div class="page-actions"><button data-action="edit-intake">返回修改</button><button class="primary" data-action="commit-intake">${first?"确认导入，继续分析":"确认保存"}</button></div><p class="data-note">重复与失败记录也会保留用于对账；有效记录进入待分析状态。</p>`;
-  }else{html+=`${first?"":`<div class="tabs" role="tablist" aria-label="内容需求类型">${[["keyword","关键词"],["customer_question","客户问题"],["product_change","产品变化"]].map(([kind,label])=>`<button type="button" role="tab" aria-selected="${state.intakeKind===kind}" class="${state.intakeKind===kind?"active":""}" data-action="intake-kind" data-kind="${kind}">${label}</button>`).join("")}</div>`}<form class="intake-form" id="intake-form">${state.intakeKind==="keyword"?`<label class="field"><span>输入方式</span><select name="format" id="intake-format"><option value="lines" ${state.intakeFormat==="lines"?"selected":""}>粘贴关键词，每行一个</option><option value="csv" ${state.intakeFormat==="csv"?"selected":""}>导入 CSV 表格</option><option value="xlsx" ${state.intakeFormat==="xlsx"?"selected":""}>导入 XLSX 表格</option></select></label>${["csv","xlsx"].includes(state.intakeFormat)?`<label class="field"><span>选择 ${state.intakeFormat.toUpperCase()} 文件</span><input type="file" id="keyword-file" accept=".${state.intakeFormat}"><small>${esc(state.intakeFileName)} · 支持 Keyword、Search Volume、Keyword Difficulty、SERP Results，也兼容 keyword、volume、kd、serp。未知指标留空。</small></label><details class="intake-schema"><summary>SERP 和市场信息怎样填写？</summary><p>每词提供前 10 个自然结果 URL，用逗号或单元格换行分隔；没有结果可留空。SERP Features 不是 URL 清单。</p><p>可选列：market、language、source、data_date、serp_source、serp_date、device。日期 YYYY-MM-DD；device 填 desktop / mobile / tablet。XLSX 仅一个工作表，公式请先转为值。</p></details>`:""}`:""}<label class="field" ${state.intakeKind==="keyword"&&state.intakeFormat==="xlsx"?"hidden":""}><span>${state.intakeKind==="keyword"?(state.intakeFormat==="csv"?"CSV 内容预览":"关键词"):state.intakeKind==="customer_question"?"客户原始问题":"产品变化说明"}</span><textarea name="text" ${state.intakeKind==="keyword"&&state.intakeFormat==="xlsx"?"disabled":"required"} maxlength="2000000" rows="8" placeholder="${state.intakeKind==="keyword"?"custom silicone gasket\nsilicone vs EPDM gasket":"保留真实问题、使用条件和上下文。"}">${state.intakeKind==="keyword"&&state.intakeFormat==="xlsx"?"":esc(state.intakeText)}</textarea><small>${state.intakeKind==="keyword"?"不自动填充搜索量或 KD；型号、材料、尺寸与限制条件保留。":"整段内容作为一条需求保存，无需生成虚构关键词或搜索量。"}</small></label><div class="field-row">${intakeSelect("market","目标市场",state.intakeMarket,marketOptions)}${intakeSelect("language","目标语言",state.intakeLanguage,languageOptions)}</div><p class="form-help">以上范围用于本次导入；表格各行已填写的市场和语言优先，空白才使用所选值。</p><div class="inline-error" role="alert"></div><div class="form-footer"><button type="button" data-action="clear-intake">清空输入</button><button class="primary" type="submit">预览并检查</button></div></form>`;}
+  }else{html+=`${first?"":`<div class="tabs" role="tablist" aria-label="内容需求类型">${[["keyword","关键词"],["customer_question","客户问题"],["product_change","产品变化"]].map(([kind,label])=>`<button type="button" role="tab" aria-selected="${state.intakeKind===kind}" class="${state.intakeKind===kind?"active":""}" data-action="intake-kind" data-kind="${kind}">${label}</button>`).join("")}</div>`}<form class="intake-form" id="intake-form">${state.intakeKind==="keyword"?`<label class="field"><span>输入方式</span><select name="format" id="intake-format"><option value="lines" ${state.intakeFormat==="lines"?"selected":""}>粘贴关键词，每行一个</option><option value="csv" ${state.intakeFormat==="csv"?"selected":""}>导入 CSV 表格</option><option value="xlsx" ${state.intakeFormat==="xlsx"?"selected":""}>导入 XLSX 表格</option></select></label>${["csv","xlsx"].includes(state.intakeFormat)?`<label class="field"><span>选择 ${state.intakeFormat.toUpperCase()} 文件</span><input type="file" id="keyword-file" accept=".${state.intakeFormat}"><small>${esc(state.intakeFileName)} · 支持 Keyword、Search Volume、Keyword Difficulty、SERP Results，也兼容 keyword、volume、kd、serp。未知指标留空。</small></label><details class="intake-schema"><summary>SERP 和市场信息怎样填写？</summary><p>每词提供前 10 个自然结果 URL，用逗号或单元格换行分隔；没有结果可留空。SERP Features 不是 URL 清单。</p><p>可选列：market、language、source、data_date、serp_source、serp_date、device。日期 YYYY-MM-DD；device 填 desktop / mobile / tablet。XLSX 仅一个工作表，公式请先转为值。</p></details>`:""}`:""}<label class="field" ${state.intakeKind==="keyword"&&state.intakeFormat==="xlsx"?"hidden":""}><span>${state.intakeKind==="keyword"?(state.intakeFormat==="csv"?"CSV 内容预览":"关键词"):state.intakeKind==="customer_question"?"客户原始问题":"产品变化说明"}</span><textarea name="text" ${state.intakeKind==="keyword"&&state.intakeFormat==="xlsx"?"disabled":"required"} maxlength="2000000" rows="8" placeholder="${state.intakeKind==="keyword"?"custom silicone gasket\nsilicone vs EPDM gasket":"保留真实问题、使用条件和上下文。"}">${state.intakeKind==="keyword"&&state.intakeFormat==="xlsx"?"":esc(state.intakeText)}</textarea><small>${state.intakeKind==="keyword"?"不自动填充搜索量或 KD；型号、材料、尺寸与限制条件保留。":"整段内容作为一条需求保存，无需生成虚构关键词或搜索量。"}</small></label><label class="field scope-search"><span>查找国家/地区</span><input type="search" data-scope-search="market" placeholder="国家中文名、英文名或代码"></label><div class="field-row">${intakeSelect("market","国家/地区数据库",state.intakeMarket,marketOptions)}${intakeSelect("language","目标语言",state.intakeLanguage,languageOptions)}</div><p class="form-help">国家/地区按 Semrush 数据库划分；语言独立选择，例如沙特市场也可使用英语。表格各行已有 market / language 优先，空白才使用所选值。</p><div class="inline-error" role="alert"></div><div class="form-footer"><button type="button" data-action="clear-intake">清空输入</button><button class="primary" type="submit">预览并检查</button></div></form>`;}
   $("#main").innerHTML=html+'</div>';const form=$("#intake-form");if(form)form.onsubmit=async event=>{event.preventDefault();rememberIntake();const button=form.querySelector('[type="submit"]');button.disabled=true;
-    try{if(!state.intakeMarket||!state.intakeLanguage)throw new Error("请选择目标市场和语言；选择其它时请填写具体内容。");state.pendingImport={kind:state.intakeKind,format:state.intakeKind==="keyword"?state.intakeFormat:"lines",text:state.intakeText,market:state.intakeMarket||null,language:state.intakeLanguage||null,request_id:crypto.randomUUID()};state.preview=await api(`/projects/${state.id}/demands/preview`,state.pendingImport);renderIntake();}catch(error){form.querySelector(".inline-error").textContent=error.message;button.disabled=false;}};
+    try{if(!state.intakeMarket||!state.intakeLanguage)throw new Error("请选择国家/地区和语言；选择其它时请填写具体内容。");state.pendingImport={kind:state.intakeKind,format:state.intakeKind==="keyword"?state.intakeFormat:"lines",text:state.intakeText,market:state.intakeMarket||null,language:state.intakeLanguage||null,request_id:crypto.randomUUID()};state.preview=await api(`/projects/${state.id}/demands/preview`,state.pendingImport);renderIntake();}catch(error){form.querySelector(".inline-error").textContent=error.message;button.disabled=false;}};
+  const search=$("[data-scope-search]");if(search)search.oninput=()=>{const select=form.elements.market;select.innerHTML=scopeOptions("market",select.value,marketOptions,search.value);};
   document.querySelectorAll("[data-scope-select]").forEach(select=>{select.onchange=()=>{const field=document.getElementById(`${select.name}-custom-field`),input=field.querySelector("input"),custom=select.value==="other";field.hidden=!custom;input.disabled=!custom;input.required=custom;if(custom)input.focus();};});
   if($("#intake-format"))$("#intake-format").onchange=event=>{rememberIntake();const next=event.target.value;if(state.intakeText&&(next==="xlsx"||state.intakeFormat==="xlsx")){event.target.value=state.intakeFormat;notify("请先完成导入或清空当前输入，再切换文件类型。");return;}state.intakeFormat=next;state.intakeFileName="";renderIntake();};
   if($("#keyword-file"))$("#keyword-file").onchange=async event=>{rememberIntake();const file=event.target.files[0];if(!file)return;if(file.size>1000000){notify("文件超过 1 MB，请拆分；每批最多 1000 条记录。");return;}const id=state.id,format=state.intakeFormat;
@@ -280,7 +409,7 @@ document.addEventListener("click",async event=>{
   }catch(error){notify(error.message);button.disabled=false;}
 });
 $("#modal").addEventListener("cancel",event=>{event.preventDefault();closeModal();});
-$("#project-select").onchange=async event=>{rememberIntake();if(state.reviewDirty||state.modalDirty||state.intakeText||state.startDirty||state.starting||(initialKeywordJourney()&&state.selectedGroupIds.size)){event.target.value=state.id;notify("请先保存当前修改、完成导入或清空未保存的筛选，再切换项目。");return;}state.id=event.target.value;state.data=null;state.historyVersion=null;state.selectedFact=null;state.preview=null;state.pendingImport=null;state.intakeText="";state.intakeMarket="中东";state.intakeLanguage="en";state.showOriginal=false;state.demands=[];state.intents=[];state.clusterData=null;state.clusterVersion=null;state.clusterQuery="";state.clusterStatus="";state.selectedGroupIds.clear();state.selectionRun=null;state.skipGroups=false;state.intakeKind="keyword";state.intakeFileName="";state.selectedPageIds.clear();state.selectionLimit=undefined;state.pageQuery="";state.sitemapFilter="";state.startDraft=null;state.startDirty=false;$("#main").innerHTML='<div class="initial-loading">正在切换项目…</div>';localStorage.setItem("pagggle-project",state.id);notify();try{await refresh();if(state.view==="demands")await route();}catch(error){notify(error.message);}};
+$("#project-select").onchange=async event=>{rememberIntake();if(state.reviewDirty||state.modalDirty||state.intakeText||state.startDirty||state.starting||(initialKeywordJourney()&&state.selectedGroupIds.size)){event.target.value=state.id;notify("请先保存当前修改、完成导入或清空未保存的筛选，再切换项目。");return;}state.id=event.target.value;state.data=null;state.historyVersion=null;state.selectedFact=null;state.preview=null;state.pendingImport=null;state.intakeText="";state.intakeMarket="";state.intakeLanguage="en";state.showOriginal=false;state.demands=[];state.intents=[];state.clusterData=null;state.clusterVersion=null;state.clusterQuery="";state.clusterStatus="";state.selectedGroupIds.clear();state.selectionRun=null;state.skipGroups=false;state.intakeKind="keyword";state.intakeFileName="";state.selectedPageIds.clear();state.selectionLimit=undefined;state.pageQuery="";state.sitemapFilter="";state.startDraft=null;state.startDirty=false;$("#main").innerHTML='<div class="initial-loading">正在切换项目…</div>';localStorage.setItem("pagggle-project",state.id);notify();try{await refresh();if(state.view==="demands")await route();}catch(error){notify(error.message);}};
 window.addEventListener("hashchange",()=>route().catch(error=>notify(error.message)));
 window.addEventListener("beforeunload",event=>{rememberIntake();if(state.reviewDirty||state.modalDirty||state.intakeText||state.startDirty||(initialKeywordJourney()&&state.selectedGroupIds.size)){event.preventDefault();event.returnValue="";}});
 state.view=["start","analysis","selection","understanding","sources","demands","intake","clusters"].includes(location.hash.slice(1))?location.hash.slice(1):"start";

@@ -60,7 +60,7 @@ cd backend
 
 ## 关键词聚类
 
-入口：`http://127.0.0.1:8000/#clusters`，也可从“机会清单 → 关键词聚类”进入。按照 [两阶段 engine 设计](docs/development/hybrid_seo_keywords_clustering_engine.md) 实现，具体边界和验证见 [实现记录](docs/development/keyword-clustering-implementation.md)。
+入口：`http://127.0.0.1:8000/#clusters`，也可从顶部“关键词分析”进入；已完成首次筛选的项目从“内容需求 → 查看关键词分析”进入。按照 [两阶段 engine 设计](docs/development/hybrid_seo_keywords_clustering_engine.md) 实现，具体边界和验证见 [实现记录](docs/development/keyword-clustering-implementation.md)。
 
 首次安装依赖后，在项目根目录准备公共本地模型：
 
@@ -68,7 +68,7 @@ cd backend
 .venv/bin/python scripts/prepare-clustering-model.py
 ```
 
-然后导入关键词 → 预览并确认 → 生成候选分组 → 点击主词查看成员、主次词及重合 URL。语义编码在本地进行，不调用付费模型或实时搜索接口；结果独立于网站解析验收，可先验证关键词算法。
+首次路径：导入关键词 → 预览并确认 → 分析全部有效关键词 → 检索组内成员/状态并选择候选组 → 保存筛选，完成首次分析。首次完成后才显示客户问题与产品变化入口；完成状态及候选选择按项目和分析版本保存。点击主词可查看成员、主次词及重合 URL。语义编码在本地进行，不调用付费模型或实时搜索接口；结果独立于网站解析验收，可先验证关键词算法。
 
 支持 CSV、单工作表 XLSX 和逐行关键词。列名兼容 `Keyword,Search Volume,Keyword Difficulty,SERP Results` 及 `keyword,volume,kd,serp`。SERP 填前 10 条自然结果完整 URL（逗号、单元格换行或 JSON 数组），不是 SERP Features。可补 `market,language,source,data_date,serp_source,serp_date,device`；日期为 YYYY-MM-DD，设备为 desktop/mobile/tablet。普通 Semrush 词表没有 SERP URL 时会保留待补证据。指标未知留空，不填零。
 
@@ -76,7 +76,7 @@ cd backend
 
 ## 需求意图
 
-核对并保存业务理解 → 添加需求 → 预览与确认导入 → 识别需求意图 → 点击结果查看候选解释、原词依据、推断和未知项。`intent_batch_size` 控制每次模型处理的输入数量，默认 5。失败或遗漏的输入可以重试，成功项保留；歧义允许多个候选，企业适配单独评估。画像更新后，已有结果会提示需要复核，目前尚未实现意图人工修订及后续问题分组。
+完成首次关键词筛选后，可增量添加客户问题或产品变化 → 预览与确认导入 → 核对并保存业务理解 → 识别需求意图 → 点击结果查看候选解释、原词依据、推断和未知项。`intent_batch_size` 控制每次模型处理的输入数量，默认 5。失败或遗漏的输入可以重试，成功项保留；歧义允许多个候选，企业适配单独评估。画像更新后，已有结果会提示需要复核，目前尚未实现意图人工修订及后续问题分组。
 
 `model_thinking` 默认 null，不向模型供应商发送此可选参数。当前 DeepSeek 配置使用 `"disabled"` 做结构化提取，并将 `model_max_tokens` 设为 12000，避免思考消耗全部输出预算却没有 JSON 正文；更换供应商时应按其支持情况调整。参数依据 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/)。无论是否启用思考，来源、ID、字段和原文片段仍由程序校验。
 
@@ -86,4 +86,4 @@ cd backend
 python3 scripts/build-ui-preview.py
 ```
 
-打开生成的 `data/preview/index.html`。此预览只使用合成资料与内存接口，关闭或刷新会重置演示修改；用于既有业务理解和需求页面展示，不模拟新版 sitemap 任务。完整新流程需使用 HTTP 服务；离线展示不代表真实模型、采集或发布验证成功。
+打开生成的 `data/preview/index.html`。此预览只使用合成资料与内存接口，关闭或刷新会重置演示修改；用于业务理解及导入表单展示，不模拟 sitemap 任务或首次关键词全流程。完整新流程需使用 HTTP 服务；离线展示不代表真实模型、采集或发布验证成功。

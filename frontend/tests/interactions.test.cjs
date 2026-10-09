@@ -44,3 +44,31 @@ test('intake scope defaults and other option preserve explicit values', () => {
   assert.match(custom, /value="other" selected/);
   assert.match(custom, /value="澳洲" required/);
 });
+
+test('first journey has one intake path and later unlocks incremental actions', () => {
+  const ui = app();
+  ui.run('state.id="A"; state.data={project:{},jobs:[],profiles:[],keyword_onboarding:null}; state.view="demands"; render()');
+  assert.equal(ui.run('state.view'), 'intake');
+  assert.match(ui.main.innerHTML, /导入你的关键词表/);
+  assert.doesNotMatch(ui.main.innerHTML, /data-kind="customer_question"|data-kind="product_change"|data-kind="intents"/);
+  ui.run('state.data.keyword_onboarding={run_id:"r1",selected_group_ids:[]}; state.view="demands"; render()');
+  assert.match(ui.main.innerHTML, /添加客户问题/);
+  assert.match(ui.main.innerHTML, /记录产品变化/);
+  ui.run('state.data={project:{},jobs:[],profiles:[],keyword_onboarding:null}; state.view="intake"; state.intakeKind="customer_question"; render()');
+  assert.equal(ui.run('state.intakeKind'), 'keyword');
+  assert.doesNotMatch(ui.main.innerHTML, /role="tablist"/);
+});
+
+test('coverage uses every valid keyword while filtering searches secondary members', () => {
+  const ui = app();
+  ui.run(`state.data={keyword_onboarding:null};
+    state.demands=[{id:"a",kind:"keyword",status:"pending"},{id:"b",kind:"keyword",status:"pending"},{id:"duplicate",kind:"keyword",status:"duplicate"}];
+    state.clusterData={runs:[{id:"r1",payload:{groups:[
+      {target_page_id:"g1",status:"needs_review",members:[{demand_id:"a",keyword:"Silicone"},{demand_id:"b",keyword:"Industrial seal"}]}
+    ]}}]};`);
+  assert.equal(ui.run('clusterCoversAll(clusterRun())'), true);
+  assert.equal(ui.run('state.clusterQuery="SEAL"; filteredGroups().length'), 1);
+  assert.equal(ui.run('state.clusterStatus="needs_evidence"; filteredGroups().length'), 0);
+  assert.equal(ui.run('clusterCoversAll(clusterRun())'), true);
+  assert.equal(ui.run('state.demands.push({id:"c",kind:"keyword",status:"pending"}); clusterCoversAll(clusterRun())'), false);
+});

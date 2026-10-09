@@ -23,6 +23,7 @@
     }else if(path==="/projects/demo/profiles/confirm"){db.profiles[0].status="confirmed";value=db.profiles[0];}
     else if(path==="/projects/demo/demands")value=demands;
     else if(path==="/projects/demo/intents")value=[];
+    else if(path==="/projects/demo/clusters")value={runs:[],settings:{}};
     else if(path.endsWith("/demands/preview")||path.endsWith("/demands/import")){
       const seen=new Set(demands.filter(r=>r.status==="pending").map(r=>r.original.toLowerCase()));
       const lines=data.kind==="keyword"?data.text.split("\n").filter(Boolean):[data.text];

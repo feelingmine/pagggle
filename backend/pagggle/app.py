@@ -64,6 +64,11 @@ class IntakeInput(BaseModel):
     request_id: str = Field(min_length=10, max_length=100)
 
 
+class KeywordCompletionInput(BaseModel):
+    run_id: str = Field(min_length=1)
+    selected_group_ids: list[str]
+
+
 def create_app(settings=None, store=None):
     settings = settings or load_settings()
     store = store or Store(ROOT / settings.database_path)
@@ -307,11 +312,19 @@ def create_app(settings=None, store=None):
 
     @app.post("/api/projects/{project_id}/demands/preview")
     def preview_demands(project_id: str, data: IntakeInput):
+        if data.kind != "keyword" and not store.keyword_onboarding(project_id):
+            raise ValueError("请先完成首次关键词分析，再添加客户问题或产品变化")
         return import_records(store, project_id, data.model_dump())
 
     @app.post("/api/projects/{project_id}/demands/import", status_code=201)
     def commit_demands(project_id: str, data: IntakeInput):
+        if data.kind != "keyword" and not store.keyword_onboarding(project_id):
+            raise ValueError("请先完成首次关键词分析，再添加客户问题或产品变化")
         return import_records(store, project_id, data.model_dump(), commit=True)
+
+    @app.post("/api/projects/{project_id}/keyword-onboarding/complete")
+    def complete_keyword_onboarding(project_id: str, data: KeywordCompletionInput):
+        return store.complete_keyword_onboarding(project_id, data.run_id, data.selected_group_ids)
 
     @app.get("/")
     def home():

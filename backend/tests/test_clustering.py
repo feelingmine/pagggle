@@ -105,8 +105,11 @@ def test_semrush_headers_csv_xlsx_equivalence_and_serp_fingerprint():
         read_table(base64.b64encode(buf.getvalue()).decode(), 'xlsx')
 
 
-def test_unknown_headers_duplicate_aliases_and_formula_are_explicit():
-    for text in ('Keyword,SERP Features\na,video', 'Keyword,keyword\na,a'):
+def test_extra_headers_preserved_without_treating_features_as_serp_urls():
+    data = parse_records(dict(kind='keyword', format='csv', text='Keyword,SERP Features\na,video'))
+    assert data[0]['raw']['SERP Features'] == 'video'
+    assert data[0]['serp'] is None
+    for text in ('Keyword,keyword\na,a', 'Keyword,Note,note\na,b,c', 'Keyword,\na,b'):
         with pytest.raises(ValueError): read_table(text, 'csv')
     wb = Workbook(); wb.active.append(['Keyword']); wb.active.append(['=1+1'])
     buf = io.BytesIO(); wb.save(buf)

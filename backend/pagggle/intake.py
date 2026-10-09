@@ -25,8 +25,8 @@ def parse_records(data):
         raw_records = [{"keyword": line.strip()} for line in data["text"].splitlines() if line.strip()]
         if data["kind"] != "keyword":
             raw_records = [{"keyword": data["text"].strip()}] if data["text"].strip() else []
-    if not 1 <= len(raw_records) <= 1000:
-        raise ValueError("每次需要 1–1000 条非空需求，请分批导入")
+    if not raw_records:
+        raise ValueError("需要至少一条非空需求")
     records = []
     for index, raw in enumerate(raw_records, 1):
         text = str(raw.get("keyword") or "").strip()

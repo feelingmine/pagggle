@@ -7,7 +7,7 @@ import json
 import re
 from datetime import date, datetime
 from urllib.parse import urlsplit, urlunsplit
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile
 
 
 COLUMNS = {
@@ -30,17 +30,12 @@ def read_table(text, format):
 
         try:
             raw = base64.b64decode(text, validate=True)
-            with ZipFile(io.BytesIO(raw)) as archive:
-                if sum(info.file_size for info in archive.infolist()) > 20_000_000:
-                    raise ValueError("XLSX 解压后超过 20 MB，请拆分文件")
             workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=False, keep_links=False)
             try:
                 if len(workbook.sheetnames) != 1:
                     raise ValueError("请提供仅含一个工作表的 XLSX，避免遗漏其他工作表")
                 rows = []
                 for row in workbook.active.iter_rows():
-                    if len(rows) > 1000 or len(row) > 50:
-                        raise ValueError("每次支持最多 1000 条、50 列，请拆分文件")
                     if any(cell.data_type == "f" for cell in row):
                         raise ValueError("XLSX 含公式，请先复制为值后导入")
                     values = [cell.value for cell in row]
@@ -51,9 +46,13 @@ def read_table(text, format):
             raise ValueError("XLSX 文件无效，请检查文件格式") from None
     if not rows:
         raise ValueError("表格为空")
-    headers = [COLUMNS.get(str(h).strip().casefold()) for h in rows[0]]
-    if None in headers or "keyword" not in headers or len(set(headers)) != len(headers):
-        raise ValueError("需要 keyword / Keyword 列；支持搜索量、KD、SERP Results、market、language、source、data_date、serp_date、serp_source、device；请移除其他列或重复列")
+    # Ignore only entirely empty spreadsheet columns (including formatting-only cells).
+    if format == "xlsx":
+        columns = [i for i in range(max(map(len, rows))) if any(i < len(row) and str(row[i]).strip() for row in rows)]
+        rows = [[row[i] if i < len(row) else "" for i in columns] for row in rows]
+    headers = [COLUMNS.get(str(h).strip().casefold(), str(h).strip()) for h in rows[0]]
+    if "" in headers or "keyword" not in headers or len({h.casefold() for h in headers}) != len(headers):
+        raise ValueError("需要 keyword / Keyword 列；表头不能为空或重复，额外列按原始数据保留")
     result = []
     for row in rows[1:]:
         if not any(str(v).strip() for v in row):

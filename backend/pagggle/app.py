@@ -58,7 +58,7 @@ class ReviewInput(BaseModel):
 class IntakeInput(BaseModel):
     kind: Literal["keyword", "customer_question", "product_change"] = "keyword"
     format: Literal["lines", "csv", "xlsx"] = "lines"
-    text: str = Field(min_length=1, max_length=2000000)
+    text: str = Field(min_length=1)
     market: str | None = Field(default=None, max_length=100)
     language: str | None = Field(default=None, max_length=100)
     request_id: str = Field(min_length=10, max_length=100)
@@ -91,7 +91,9 @@ def create_app(settings=None, store=None):
                 return JSONResponse({"detail": "不接受跨站写入请求"}, status_code=403)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "仅接受 JSON 请求"}, status_code=415)
-            if len(await request.body()) > 3000000:
+            path = request.url.path.strip("/").split("/")
+            intake = request.method == "POST" and len(path) == 5 and path[:2] == ["api", "projects"] and path[3] == "demands" and path[4] in {"preview", "import"}
+            if not intake and len(await request.body()) > 3000000:
                 return JSONResponse({"detail": "资料过大，请拆分补充"}, status_code=413)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"

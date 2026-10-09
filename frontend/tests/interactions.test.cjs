@@ -34,23 +34,22 @@ test('original evidence is collapsed, complete, escaped and never translated', (
 
 test('intake scope defaults and other option preserve explicit values', () => {
   const ui = app();
-  const markets = ui.run('intakeSelect("market","目标市场",state.intakeMarket,marketOptions)');
+  const markets = ui.run('intakeMarketField(state.intakeMarket)');
   const languages = ui.run('intakeSelect("language","目标语言",state.intakeLanguage,languageOptions)');
-  assert.match(markets, /value="" selected>请选择国家\/地区/);
-  assert.match(markets, /name="market" required/);
-  assert.doesNotMatch(markets, /value="中东"/);
+  assert.match(markets, /name="market" value=""/);
+  assert.match(markets, /role="combobox"[^>]*required/);
+  assert.match(markets, /aria-controls="market-options"/);
   assert.match(languages, /value="en" selected/);
-  assert.equal((markets.match(/<option /g) || []).length, 123);
-  assert.match(markets, /value="uk"/);
-  assert.doesNotMatch(markets, /value="gb"|value="mobile-us"/);
+  assert.equal(ui.run('marketOptions.length'), 121);
+  assert.equal(ui.run('marketOptions.some(([code])=>code==="uk")'), true);
+  assert.equal(ui.run('marketOptions.some(([code])=>code==="gb"||code==="mobile-us")'), false);
   assert.match(languages, /value="ar"/);
   assert.match(languages, /value="pt"/);
-  const searched = ui.run('scopeOptions("market","us",marketOptions,"saudi")');
-  assert.match(searched, /value="sa"/);
-  assert.match(searched, /value="us" selected/);
-  assert.doesNotMatch(searched, /value="uk"/);
-  const custom = ui.run('intakeSelect("market","目标市场","澳洲",marketOptions)');
-  assert.match(custom, /value="other" selected/);
+  const selected = ui.run('intakeMarketField("us")');
+  assert.match(selected, /value="美国 · US"/);
+  assert.match(selected, /name="market" value="us"/);
+  const custom = ui.run('intakeMarketField("澳洲")');
+  assert.match(custom, /name="market" value="other"/);
   assert.match(custom, /value="澳洲" required/);
 });
 

@@ -1,0 +1,217 @@
+"""Use the user's real snapshot; no invented keywords, customer records or model responses."""
+import hashlib
+import json
+import os
+import sqlite3
+
+import httpx
+import pytest
+
+from pagggle.config import ROOT, load_settings
+from pagggle.content_strategy import digest, page_role
+from pagggle.content_workflow import freeze_keywords
+from pagggle.skill_execution import SkillExecution, load_skills
+from pagggle.skill_strategy import PageNotes, assessment_inputs, complete, keyword_batch_limit, pack, parallel, split_body
+from pagggle.store import Store, now, uid
+
+pytestmark=pytest.mark.skipif(os.environ.get('PAGGGLE_VERIFY_FIXED_DATA')!='1',reason='Requires user-authorized private files and real site snapshot')
+PID='3569ed46f2554178b327c2e7c58c8b3b'
+
+
+@pytest.fixture(scope='module')
+def snapshot():
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        return json.loads(db.execute('SELECT input_json FROM content_runs WHERE project_id=? AND id=?',(PID,'ebeeb183544d4cb0a3a87a01823caa27')).fetchone()[0])
+
+
+def test_all_keywords_are_batched_without_loss_and_missing_ids_are_rejected(snapshot):
+    rows=[{'i':i,'keyword':r['keyword']} for i,r in enumerate(snapshot['keywords'])]
+    batches=pack(rows,60000,{'source':'real saved input'},600)
+    assert len(batches)>1
+    assert [r for b in batches for r in b]==rows
+    assert all(len(json.dumps({'source':'real saved input','items':b},ensure_ascii=False))<=60000 for b in batches)
+    complete([r['i'] for b in batches for r in b],range(len(rows)))
+    with pytest.raises(ValueError):complete([r['i'] for b in batches for r in b][:-1],range(len(rows)))
+
+
+def test_output_budget_splits_all_real_keywords_before_submission(snapshot):
+    settings=load_settings()
+    limit=keyword_batch_limit(settings)
+    assert 1<=limit<settings.strategy_keyword_batch_size
+    rows=[{'i':i,'keyword':r['keyword']} for i,r in enumerate(snapshot['keywords'])]
+    batches=pack(rows,settings.model_input_chars,limit=limit)
+    assert [r for batch in batches for r in batch]==rows
+    assert max(map(len,batches))<=limit
+    assert keyword_batch_limit(settings.model_copy(update={'model_max_tokens':6000}))<limit
+
+
+def test_real_page_splitting_counts_escapes_and_retains_every_character(snapshot):
+    pages=[p for p in snapshot['pages']+snapshot['competitors'] if p['status']=='read' and p['body']]
+    split_count=0
+    for p in pages:
+        context=lambda body:{'items':[{'title':p['title'],'url':p['url'],'body':body}]}
+        parts=split_body(p['body'],context,1000)
+        assert ''.join(parts)==p['body']
+        assert all(len(json.dumps(context(part),ensure_ascii=False))<=1000 for part in parts)
+        split_count+=len(parts)>1
+    assert split_count>0
+    with pytest.raises(ValueError,match='正文之外'):
+        split_body(pages[0]['body'],lambda body:{'title':pages[0]['body'],'body':body},10)
+
+
+def test_long_target_is_split_before_assessment_and_short_target_is_unchanged(snapshot):
+    page=max((p for p in snapshot['pages'] if p['status']=='read'),key=lambda p:len(p['body']))
+    target={k:page[k] for k in ('url','title','body')}
+    context={'site':snapshot['project']['site_url'],'seeds':snapshot['seeds']}
+    parts=assessment_inputs(context,target,5000)
+    assert len(parts)>1
+    assert ''.join(p['target_full_text']['body'] for p in parts)==target['body']
+    assert all(len(json.dumps(p,ensure_ascii=False))<=5000 and p['partial_target'] for p in parts)
+    assert assessment_inputs(context,target,200000)==[{**context,'target_full_text':target}]
+
+
+@pytest.mark.parametrize('workers',[1,3,10])
+def test_thread_pool_starts_configured_workers_together_and_never_exceeds_limit(snapshot,workers):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    rows=snapshot['keywords'][:30]
+    lock=threading.Lock();full=threading.Event();release=threading.Event()
+    active=peak=0
+    def work(row):
+        nonlocal active,peak
+        with lock:
+            active+=1;peak=max(peak,active)
+            if active==workers:full.set()
+        try:
+            assert release.wait(5)
+            return row['id']
+        finally:
+            with lock:active-=1
+    with ThreadPoolExecutor(max_workers=1) as runner:
+        pending=runner.submit(parallel,rows,work,workers,lambda _:None,'验证')
+        try:assert full.wait(5), 'Requests did not start concurrently'
+        finally:release.set()
+        assert pending.result(timeout=10)==[r['id'] for r in rows]
+    assert peak==workers
+
+
+def test_progress_follows_completion_without_reordering_results(snapshot):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    rows=snapshot['keywords'][:10]
+    first=rows[0]['id'];release=threading.Event();progress=threading.Event()
+    def work(row):
+        if row['id']==first:assert release.wait(5)
+        return row['id']
+    def checkpoint(message):
+        if message:progress.set()
+    with ThreadPoolExecutor(max_workers=1) as runner:
+        pending=runner.submit(parallel,rows,work,10,checkpoint,'验证')
+        try:
+            assert progress.wait(5), 'Slow first request blocked completion reporting'
+            assert not pending.done()
+        finally:release.set()
+        assert pending.result(timeout=10)==[r['id'] for r in rows]
+
+
+def test_failed_or_cancelled_pool_does_not_start_queued_requests(snapshot):
+    started=[]
+    def failure(row):
+        started.append(row['id'])
+        raise ValueError('HTTP 402')
+    with pytest.raises(ValueError,match='HTTP 402'):
+        parallel(snapshot['keywords'][:30],failure,1,lambda _:None,'验证')
+    assert started==[snapshot['keywords'][0]['id']]
+    started.clear()
+    def cancelled(_):raise InterruptedError('cancelled')
+    with pytest.raises(InterruptedError):
+        parallel(snapshot['keywords'][:30],lambda row:started.append(row['id']),10,cancelled,'验证')
+    assert not started
+
+
+def test_changed_real_file_selection_changes_strategy_input(snapshot):
+    settings=load_settings();config=settings.content_workflows[PID]
+    one=freeze_keywords(config,['silicone-teether_all-keywords_us_2026-10-09.xlsx'])
+    assert len(one['keywords'])<len(snapshot['keywords'])
+    assert digest(one['keywords'])!=digest(snapshot['keywords'])
+    assert {r['id'] for r in one['keywords']} <= {r['id'] for r in snapshot['keywords']}
+    assert one['seeds']==snapshot['seeds']
+
+
+@pytest.mark.parametrize('http_status',[None,402])
+def test_real_skill_text_is_in_actual_request_and_network_failure_is_not_rule_fallback(snapshot,tmp_path,monkeypatch,http_status):
+    path=tmp_path/'copy.sqlite3'
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as src,sqlite3.connect(path) as dst:src.backup(dst)
+    store=Store(path);store.recover_jobs();settings=load_settings();skills=load_skills(settings)
+    job=store.create_job(PID,'content_plan');run=uid()
+    with store.connect() as db:db.execute('INSERT INTO content_runs (id,project_id,job_id,version,created_at) VALUES (?,?,?,?,?)',(run,PID,job,'skill-content-strategy-1',now()))
+    captured=[]
+    class Offline:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def post(self,url,**kwargs):
+            captured.append(kwargs['json'])
+            if http_status:return httpx.Response(http_status)
+            raise httpx.ConnectError('offline verification')
+    monkeypatch.setattr('pagggle.skill_execution.httpx.Client',Offline)
+    page=next(p for p in snapshot['pages'] if p['status']=='read' and page_role(p)=='content')
+    engine=SkillExecution(store,PID,run,settings,skills,lambda _:None)
+    with pytest.raises(ValueError,match='HTTP 402' if http_status else '未回退规则'):
+        engine.call('page_inventory',{'items':[{'id':0,'body':page['body']}]},PageNotes,'读取真实原文',names=('content-strategy','seo-audit'))
+    assert len(captured)==1
+    system=captured[0]['messages'][0]['content']
+    for name,item in skills.items():
+        assert item['instructions'] in system
+        assert item['sha256']==hashlib.sha256(item['instructions'].encode()).hexdigest()
+    assert settings.api_key.get_secret_value() not in system
+    assert settings.api_key.get_secret_value() not in captured[0]['messages'][1]['content']
+    with store.connect() as db:
+        record=json.loads(db.execute('SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=?',(PID,run)).fetchone()[0])
+    assert record['status']=='failed' and record['output'] is None
+    if http_status:assert record['http_status']==http_status
+    assert record['request']==captured[0]
+    assert not any(c['status']=='succeeded' for c in engine.records)
+
+
+def test_cancelled_skill_execution_never_sends_a_request(tmp_path,monkeypatch):
+    settings=load_settings();skills=load_skills(settings)
+    def cancelled(_):raise InterruptedError()
+    def forbidden(*args,**kwargs):pytest.fail('Cancelled run sent a model request')
+    monkeypatch.setattr('pagggle.skill_execution.httpx.Client',forbidden)
+    engine=SkillExecution(None,PID,'cancelled',settings,skills,cancelled)
+    with pytest.raises(InterruptedError):engine.call('page_inventory',{},PageNotes,'取消校验')
+
+
+def test_actual_model_quotes_resolve_layout_whitespace_without_accepting_rewrites():
+    from pagggle.skill_strategy import original_quote
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        row=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND json_extract(payload,'$.status')='failed'",(PID,'72ccdd6af5bf42cc81563b6975133c83')).fetchone()
+    if not row:pytest.skip('Requires the real first model response with HTML line breaks')
+    record=json.loads(row[0]);pages={p['id']:p for p in json.loads(record['request']['messages'][1]['content'])['items']}
+    notes=PageNotes.model_validate_json(record['attempts'][-1]['content'])
+    adjusted=0
+    for page in notes.pages:
+        for quote in page.quotes:
+            source=pages[page.id]['body']
+            exact=original_quote(source,quote)
+            assert exact in source
+            adjusted+=exact!=quote
+            with pytest.raises(ValueError):original_quote(source,quote+' '+quote)
+    assert adjusted>0
+
+
+def test_actual_incomplete_assignment_keeps_unique_results_and_retries_ambiguous_ids():
+    from pagggle.skill_strategy import Assignments, unique_assignments
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        row=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND stage='keyword_assignment' AND json_extract(payload,'$.status')='failed'",(PID,'cb719212f7104576a2acfcbecb65ddd7')).fetchone()
+    if not row:pytest.skip('Requires actual keyword-assignment response with duplicate/missing IDs')
+    record=json.loads(row[0]);expected={r['i'] for r in json.loads(record['request']['messages'][1]['content'])['items']}
+    for attempt in record['attempts']:
+        output=Assignments.model_validate_json(attempt['content']).model_dump()
+        resolved,unresolved=unique_assignments(output,expected)
+        ids=[i for g in resolved['groups']+resolved['deferred'] for i in g['members']]
+        assert len(ids)==len(set(ids))
+        assert set(ids).isdisjoint(unresolved)
+        assert set(ids)|unresolved==expected
+        assert unresolved

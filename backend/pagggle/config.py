@@ -43,6 +43,9 @@ class Settings(BaseModel):
     clustering_distance_threshold: float = Field(default=0.65, gt=0, le=2, allow_inf_nan=False)
     clustering_serp_threshold: int = Field(default=3, ge=1, le=10)
     content_workflows: dict[str, ContentWorkflowSettings] = Field(default_factory=dict)
+    strategy_skill_files: dict[str, str] = Field(default_factory=dict)
+    strategy_concurrency: int = Field(default=10, ge=1, le=64)
+    strategy_keyword_batch_size: int = Field(default=600, ge=20, le=1000)
 
     @field_validator("BASE_URL")
     @classmethod

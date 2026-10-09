@@ -114,12 +114,19 @@ class Store:
                     project_id TEXT NOT NULL REFERENCES projects(id), url TEXT NOT NULL,
                     payload TEXT NOT NULL, PRIMARY KEY(project_id, url)
                 );
+                CREATE TABLE IF NOT EXISTS content_skill_calls (
+                    project_id TEXT NOT NULL REFERENCES projects(id),
+                    run_id TEXT NOT NULL REFERENCES content_runs(id),
+                    request_hash TEXT NOT NULL, stage TEXT NOT NULL,
+                    payload TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(project_id, run_id, request_hash)
+                );
             """)
             if "options" not in {r["name"] for r in db.execute("PRAGMA table_info(jobs)")}:
                 db.execute("ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
             if "analysis_job_id" not in {r["name"] for r in db.execute("PRAGMA table_info(profiles)")}:
                 db.execute("ALTER TABLE profiles ADD COLUMN analysis_job_id TEXT")
-            db.execute("PRAGMA user_version=9")
+            db.execute("PRAGMA user_version=10")
         self.path.chmod(0o600)
 
     @contextmanager

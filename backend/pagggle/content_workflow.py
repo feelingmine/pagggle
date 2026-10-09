@@ -11,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .bulk_evidence import batch_evidence
 from .config import ROOT
-from .content_strategy import VERSION, build_result, consolidate, digest, parse_seeds, page_role
+from .content_strategy import VERSION as LEGACY_VERSION, build_result, consolidate, digest, parse_seeds, page_role
+from .skill_execution import SkillExecution, load_skills
+from .skill_strategy import VERSION, build_skill_result, execute_strategy
 from .crawl import CrawlError, fetch_firecrawl, normalize_url, parse_html
 from .intake import parse_records
 from .store import encode, now, uid
@@ -136,7 +138,8 @@ def register_content_workflow(app, store, settings):
     def checkpoint(project_id, job_id, progress):
         if store.cancelled(project_id,job_id):
             raise InterruptedError()
-        store.update_job(project_id,job_id,status='running',progress=progress)
+        if progress is not None:
+            store.update_job(project_id,job_id,status='running',progress=progress)
 
     def work(project_id, job_id, run_id, names, source_run):
         check = lambda message: checkpoint(project_id,job_id,message)
@@ -156,8 +159,15 @@ def register_content_workflow(app, store, settings):
             input_hash = digest(frozen)
             with store.connect() as db:
                 db.execute('UPDATE content_runs SET input_json=?,input_hash=? WHERE project_id=? AND id=?',(encode(frozen),input_hash,project_id,run_id))
-            check('4/5 匹配已有页面，检查内容覆盖')
-            result = build_result(frozen)
+            check('4/5 匹配已有页面，检查内容覆盖' if source_run else '2/5 加载实际 skill 指令并阅读正文')
+            if source_run:
+                result = build_skill_result(frozen) if saved['version']==VERSION else build_result(frozen)
+            else:
+                execution = SkillExecution(store,project_id,run_id,settings,load_skills(settings),check)
+                result = execute_strategy(frozen,execution,settings,check)
+                input_hash = digest(frozen)
+                with store.connect() as db:
+                    db.execute('UPDATE content_runs SET input_json=?,input_hash=? WHERE project_id=? AND id=?',(encode(frozen),input_hash,project_id,run_id))
             check('5/5 生成优化建议与新增大纲')
             result_hash = digest(result)
             if source_run and result_hash != saved['result_hash']:
@@ -177,11 +187,12 @@ def register_content_workflow(app, store, settings):
             store.update_job(project_id,job_id,status='failed',error=message,progress='执行中断')
 
     def start(project_id, names=None, source_run=None):
+        version = run_for(project_id,source_run)['version'] if source_run else VERSION
         job_id = store.create_job(project_id,'content_plan')
         run_id = uid()
         try:
             with store.connect() as db:
-                db.execute('INSERT INTO content_runs (id,project_id,job_id,version,replay_of,created_at) VALUES (?,?,?,?,?,?)',(run_id,project_id,job_id,VERSION,source_run,now()))
+                db.execute('INSERT INTO content_runs (id,project_id,job_id,version,replay_of,created_at) VALUES (?,?,?,?,?,?)',(run_id,project_id,job_id,version,source_run,now()))
             app.state.executor.submit(work,project_id,job_id,run_id,names,source_run)
         except Exception:
             store.update_job(project_id,job_id,status='failed',error='无法启动内容规划')
@@ -194,7 +205,7 @@ def register_content_workflow(app, store, settings):
         config = settings.content_workflows.get(project_id)
         with store.connect() as db:
             ids = [r['id'] for r in db.execute('SELECT id FROM content_runs WHERE project_id=? ORDER BY created_at DESC',(project_id,))]
-        return {'current_version':VERSION,'configured':bool(config),'files':[{'name':Path(p).name,'bytes':local_file(p).stat().st_size} for p in config.keyword_files] if config else [],
+        return {'current_version':VERSION,'replay_versions':[VERSION,LEGACY_VERSION],'configured':bool(config),'files':[{'name':Path(p).name,'bytes':local_file(p).stat().st_size} for p in config.keyword_files] if config else [],
                 'seed_file':Path(config.seed_file).name if config else None,'market':config.market if config else None,'language':config.language if config else None,
                 'competitor_urls':config.competitor_urls if config else [],'own_scope':config.own_scope if config else 'selected','own_evidence_urls':config.own_evidence_urls if config else [],'runs':[run_for(project_id,i) for i in ids]}
 
@@ -209,8 +220,8 @@ def register_content_workflow(app, store, settings):
     @app.post(prefix+'/{run_id}/replay')
     def replay(project_id: str, run_id: str):
         saved = run_for(project_id,run_id,True)
-        if saved['status']!='succeeded' or saved['version']!=VERSION:
-            raise ValueError('仅可重放当前规则版本的已完成规划')
+        if saved['status']!='succeeded' or saved['version'] not in {VERSION,LEGACY_VERSION}:
+            raise ValueError('仅可重放兼容执行版本的已完成规划')
         return start(project_id,source_run=run_id)
 
     @app.get(prefix+'/{run_id}')
@@ -240,6 +251,18 @@ def register_content_workflow(app, store, settings):
             rows = [{**r,'reason':reasons[r['id']]} for r in rows if r['id'] in reasons]
         rows = [r for r in rows if q.casefold() in r['keyword'].casefold()]
         return {'topic':{k:v for k,v in detail.items() if k!='member_ids'} if detail else None,'total':len(rows),'page':page,'size':size,'rows':rows[(page-1)*size:page*size]}
+
+    @app.get(prefix+'/{run_id}/execution')
+    def execution_records(project_id: str, run_id: str):
+        saved = run_for(project_id,run_id,True)
+        origin = run_id
+        while saved['replay_of']:
+            origin = saved['replay_of']
+            saved = run_for(project_id,origin,True)
+        with store.connect() as db:
+            records = [json.loads(r['payload']) for r in db.execute('SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? ORDER BY stage,request_hash',(project_id,origin))]
+        return Response(encode({'run_id':run_id,'source_run':origin,'calls':records}),media_type='application/json',
+                        headers={'Content-Disposition':f'attachment; filename="pagggle-execution-{run_id}.json"'})
 
     @app.get(prefix+'/{run_id}/export')
     def export(project_id: str, run_id: str):

@@ -20,5 +20,11 @@
   "clustering_model_cache": "data/models",
   "clustering_distance_threshold": 0.65,
   "clustering_serp_threshold": 3,
-  "content_workflows": {}
+  "content_workflows": {},
+  "strategy_skill_files": {
+    "content-strategy": "/path/to/content-strategy/SKILL.md",
+    "seo-audit": "/path/to/seo-audit/SKILL.md"
+  },
+  "strategy_concurrency": 10,
+  "strategy_keyword_batch_size": 600
 }

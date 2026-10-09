@@ -129,6 +129,21 @@ function updateSelectionSummary(){
 function originalQuotes(fact){
   return `<details class="original-quotes" data-original ${state.showOriginal?"open":""}><summary>网站原文 · ${fact.citations.length} 条依据</summary>${fact.citations.map(ref=>`<blockquote>${esc(ref.quote)}</blockquote><button class="text-button accent-link" data-action="source" data-id="${esc(ref.source_id)}">查看完整来源</button>`).join("")}</details>`;
 }
+function seedRun(profile=visibleProfile()){return state.data?.seed_keyword_runs?.find(r=>r.profile_version===profile?.version);}
+function seedKeywordsMarkup(profile,isHistory){
+  const run=seedRun(profile),terms=run?.payload.keywords||[];
+  return `<section class="business-section seed-keywords" id="section-seed-keywords"><h2>搜索基础词</h2><p class="form-help">从产品与服务分类提取行业通用大词，用于搜索拓词。搜索词沿用网站语言，中文说明便于核对。</p><div class="page-actions">${!isHistory?`<button data-action="extract-seeds" ${activeJob()?"disabled":""}>${run?"重新提取基础词":"提取产品与服务基础词"}</button>`:""}${terms.length?'<button data-action="copy-seeds">复制全部基础词</button>':""}</div>${run?`<p class="form-help">依据业务理解 v${run.profile_version} · ${terms.length} 个基础词 · 语言 ${esc(run.payload.language)} · ${formatTime(run.created_at)}。请核对分类范围后用于搜索。</p>${[["product","产品分类"],["service","服务分类"]].map(([kind,label])=>`<div class="seed-kind"><h3>${label}</h3>${terms.some(t=>t.kind===kind)?terms.map((term,index)=>term.kind===kind?`<div class="seed-term"><div><button class="text-button accent-link seed-word" data-action="copy-seed" data-index="${index}" aria-label="复制基础词 ${esc(term.keyword)}">${esc(term.keyword)}</button><p>${esc(term.category)}</p></div><button class="text-button" data-action="seed-evidence" data-index="${index}">查看依据</button></div>`:"").join(""):'<p class="form-help">当前依据未提取出该类基础词。</p>'}</div>`).join("")}`:'<p class="form-help">本版尚未提取基础词。使用已有产品与服务主张，不重新采集网站；待确认、推断及冲突主张暂不纳入。</p>'}<p class="data-note">基础词用于开始搜索，不代表已验证的需求或页面计划。复制后可在关键词工具中拓词，再导入结果。</p></section>`;
+}
+async function copySeedKeywords(index){
+  const run=seedRun();if(!run)return;
+  const terms=index==null?run.payload.keywords:[run.payload.keywords[index]],text=terms.map(t=>t.keyword).join("\n");
+  try{await navigator.clipboard.writeText(text);notify(index==null?`已复制 ${terms.length} 个基础词，每行一个。`:`已复制：${text}`);}
+  catch{modal("复制搜索基础词",`<p class="form-help">浏览器未允许自动复制，请选中下方词表复制。</p><textarea readonly rows="10" aria-label="搜索基础词词表">${esc(text)}</textarea>`,null);}
+}
+function showSeedEvidence(index){
+  const profile=visibleProfile(),term=seedRun(profile)?.payload.keywords[index];if(!term)return;
+  modal("基础词依据",`<h3>${esc(term.keyword)}</h3><p class="form-help">${esc(term.category)} · 业务理解 v${profile.version}</p>${term.fact_indices.map(i=>{const fact=profile.payload.facts[i];return `<section class="source-row"><p>${esc(fact.statement)}</p><p class="form-help">${esc(fact.scope)} · ${esc(labels[fact.status])}</p>${fact.citations.map(c=>`<blockquote>${esc(c.quote)}</blockquote><button class="text-button accent-link" data-action="source" data-id="${esc(c.source_id)}">查看原始页面资料</button>`).join("")}</section>`;}).join("")}`,null);
+}
 function renderUnderstanding(){
   const profile=visibleProfile(),isHistory=profile.version!==latest().version,facts=profile.payload.facts;
   const categories=["product","business","capability","scenario","market","case","tone","contact"].filter(c=>facts.some(f=>f.category===c));
@@ -137,11 +152,12 @@ function renderUnderstanding(){
   const sources=state.data.sources.filter(s=>s.status==="read"&&s.kind!=="discovery"),citationIds=[...new Set(facts.flatMap(f=>f.citations.map(c=>c.source_id)))];
   let html=breadcrumb("业务理解",badge(profile.status,profile.status==="confirmed"?"版本已核对":isHistory?`历史版本 v${profile.version}`:"待核对版本"));
   html+='<div class="understanding-layout"><nav class="outline-nav" aria-label="业务理解章节"><a class="selected" href="#document-top" data-scroll="document-top">我们对你业务的理解</a>';
-  html+=categories.map(c=>`<a href="#section-${c}" data-scroll="section-${c}">${esc(labels[c])}</a>`).join("");html+='<div class="nav-divider"></div><a href="#sources">资料与页面</a><a href="#history" data-action="history">历史版本</a></nav>';
+  html+='<a href="#section-seed-keywords" data-scroll="section-seed-keywords">搜索基础词</a>'+categories.map(c=>`<a href="#section-${c}" data-scroll="section-${c}">${esc(labels[c])}</a>`).join("");html+='<div class="nav-divider"></div><a href="#sources">资料与页面</a><a href="#history" data-action="history">历史版本</a></nav>';
   html+='<article class="document" id="document-top"><h1>我们对你业务的理解</h1><p class="document-intro">请先核对关键业务；不确定的信息可以稍后补充。</p>';
   html+=`<div class="coverage-line"><span>已读取 ${sources.length} 份页面与业务资料</span><a class="accent-link" href="#sources">查看页面范围</a><a class="accent-link" href="#analysis">分析进度</a></div>`+coverageMarkup(profile);
   if(activeJob()||state.data.jobs[0]?.status==="failed")html+=jobMarkup();if(isHistory)html+=`<div class="notice">正在查看历史版本 v${profile.version}。<button class="text-button" data-action="current-version">返回当前版本</button></div>`;
   html+=`<button class="text-button original-toggle" data-action="toggle-original" aria-pressed="${state.showOriginal}">${state.showOriginal?"收起网站原文":"显示网站原文"}</button>`;
+  html+=seedKeywordsMarkup(profile,isHistory);
   html+=categories.map(category=>`<section class="business-section" id="section-${category}"><h2>${esc(labels[category])}</h2>${facts.map((fact,index)=>fact.category===category?`<div class="fact ${index===state.selectedFact?"selected":""}"><div class="fact-line"><p>${esc(fact.statement)}${fact.citations.map(c=>`<button class="source-marker" data-action="source" data-id="${esc(c.source_id)}" aria-label="查看来源 ${citationIds.indexOf(c.source_id)+1}">[${citationIds.indexOf(c.source_id)+1}]</button>`).join("")}</p>${!isHistory?`<div class="fact-actions">${fact.status!=="confirmed"?`<button class="${index===state.selectedFact?"accent-button":"text-button"}" data-action="focus-review" data-index="${index}">核对</button>`:""}<button class="text-button" data-action="edit-fact" data-index="${index}">修改</button></div>`:""}</div><div class="fact-meta">${esc(fact.scope||"适用范围待确认")} · ${esc(labels[fact.status])}</div>${originalQuotes(fact)}</div>`:"").join("")}</section>`).join("");
   html+=`<section class="source-footnotes"><details data-original ${state.showOriginal?"open":""}><summary>网站来源 · ${citationIds.length} 份</summary>`;
   html+=citationIds.map((id,index)=>{const source=state.data.sources.find(s=>s.id===id);return `<p><button class="source-marker" data-action="source" data-id="${esc(id)}">[${index+1}]</button><button class="text-button accent-link" data-action="source" data-id="${esc(id)}">${esc(source?.title||"来源资料")}</button></p>`;}).join("");
@@ -403,7 +419,7 @@ document.addEventListener("click",async event=>{
     else if(action==="view-version"){if(state.reviewDirty){notify("请先保存当前核对内容。");return;}state.historyVersion=Number(button.dataset.version);closeModal(true);render();}else if(action==="current-version"){state.historyVersion=null;render();}
     else if(action==="discard-review"){state.reviewDirty=false;render();notify();}
     else if(["focus-review","select-review"].includes(action)){if(state.reviewDirty){notify("请先保存当前核对内容，或撤销本次选择。");return;}state.selectedFact=Number(button.dataset.index);render();if(action==="focus-review")$("#review-panel").scrollIntoView({behavior:"smooth",block:"start"});}
-    else if(action==="run-job"||action==="regenerate"){button.disabled=true;const kind=action==="regenerate"?"understand":button.dataset.kind==="analyze"?"discover":button.dataset.kind,previous=state.data.jobs.find(j=>j.id===button.dataset.job);await api(`/projects/${state.id}/jobs`,{kind,...(previous?.options||{}),...(["crawl","discover"].includes(kind)?{crawl_max_pages:previous?.options?.crawl_max_pages??null}:{})});closeModal(true);if(kind==="clusters"){state.view="clusters";state.clusterVersion=null;window.history.replaceState(null,"","#clusters");}else if(kind!=="intents"){state.view="analysis";window.history.replaceState(null,"","#analysis");}await refresh();}
+    else if(action==="run-job"||action==="regenerate"){button.disabled=true;const kind=action==="regenerate"?"understand":button.dataset.kind==="analyze"?"discover":button.dataset.kind,previous=state.data.jobs.find(j=>j.id===button.dataset.job);await api(`/projects/${state.id}/jobs`,{kind,...(previous?.options||{}),...(["crawl","discover"].includes(kind)?{crawl_max_pages:previous?.options?.crawl_max_pages??null}:{})});closeModal(true);if(kind==="clusters"){state.view="clusters";state.clusterVersion=null;window.history.replaceState(null,"","#clusters");}else if(kind==="seed_keywords"){state.view="understanding";window.history.replaceState(null,"","#understanding");}else if(kind!=="intents"){state.view="analysis";window.history.replaceState(null,"","#analysis");}await refresh();}
     else if(action==="select-visible"){for(const s of selectionRows())if(s.status!=="excluded")state.selectedPageIds.add(s.id);updateSelectionRows();}
     else if(action==="clear-pages"){state.selectedPageIds.clear();updateSelectionRows();}
     else if(action==="collect-selected"){button.disabled=true;await api(`/projects/${state.id}/jobs`,{kind:"crawl",source_ids:[...state.selectedPageIds],crawl_max_pages:state.selectionLimit});state.view="analysis";window.history.replaceState(null,"","#analysis");await refresh();}
@@ -412,6 +428,10 @@ document.addEventListener("click",async event=>{
     else if(action==="toggle-original"){state.showOriginal=!state.showOriginal;document.querySelectorAll("[data-original]").forEach(details=>{details.open=state.showOriginal;});button.setAttribute("aria-pressed",String(state.showOriginal));button.textContent=state.showOriginal?"收起网站原文":"显示网站原文";}
     else if(action==="show-cluster")showCluster(button.dataset.id);
     else if(action==="show-intent")showIntent(button.dataset.id);
+    else if(action==="extract-seeds"){if(state.reviewDirty){notify("请先保存当前业务核对内容。");return;}button.disabled=true;await api(`/projects/${state.id}/jobs`,{kind:"seed_keywords",profile_version:visibleProfile().version});await refresh();}
+    else if(action==="copy-seeds")await copySeedKeywords();
+    else if(action==="copy-seed")await copySeedKeywords(Number(button.dataset.index));
+    else if(action==="seed-evidence")showSeedEvidence(Number(button.dataset.index));
     else if(action==="demand-page"){state.demandPages[state.view]=Number(button.dataset.page);refreshDemandTable();const next=$(`[data-direction="${button.dataset.direction}"]`);(next.disabled?$("[data-demand-page-size]"):next).focus();}
     else if(action==="clear-intake"){state.intakeText="";state.intakeFileName="";state.preview=null;state.pendingImport=null;renderIntake();}
     else if(action==="open-intake"){rememberIntake();const kind=initialKeywordJourney()?"keyword":button.dataset.kind||"keyword";if(state.intakeText&&kind!==state.intakeKind){notify("请先保存或清空当前输入，再切换需求类型。");return;}state.intakeKind=kind;state.preview=null;navigate("intake");}

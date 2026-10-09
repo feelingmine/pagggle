@@ -92,12 +92,18 @@ class Store:
                     run_id TEXT NOT NULL REFERENCES cluster_runs(id),
                     selected_group_ids TEXT NOT NULL, completed_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS seed_keyword_runs (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    job_id TEXT NOT NULL REFERENCES jobs(id), profile_version INTEGER NOT NULL,
+                    payload TEXT NOT NULL, created_at TEXT NOT NULL,
+                    UNIQUE(project_id, job_id)
+                );
             """)
             if "options" not in {r["name"] for r in db.execute("PRAGMA table_info(jobs)")}:
                 db.execute("ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}'")
             if "analysis_job_id" not in {r["name"] for r in db.execute("PRAGMA table_info(profiles)")}:
                 db.execute("ALTER TABLE profiles ADD COLUMN analysis_job_id TEXT")
-            db.execute("PRAGMA user_version=6")
+            db.execute("PRAGMA user_version=7")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -141,8 +147,28 @@ class Store:
             jobs = [{**dict(r), "options": json.loads(r["options"])} for r in db.execute("SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT 30", (project_id,))]
             runs = [{**dict(r), "usage": json.loads(r["usage"])} for r in db.execute("SELECT id,job_id,model,usage,created_at FROM model_runs WHERE project_id=? ORDER BY created_at DESC", (project_id,))]
             onboarding = db.execute("SELECT * FROM keyword_onboarding WHERE project_id=?", (project_id,)).fetchone()
+            seeds = [{**dict(r), "payload": json.loads(r["payload"])} for r in db.execute("SELECT * FROM seed_keyword_runs WHERE project_id=? ORDER BY rowid DESC", (project_id,))]
         return {"project": dict(project), "sources": sources, "profiles": profiles, "jobs": jobs, "model_runs": runs,
+            "seed_keyword_runs": seeds,
             "keyword_onboarding": {**dict(onboarding), "selected_group_ids": json.loads(onboarding["selected_group_ids"])} if onboarding else None}
+
+    def save_seed_keywords(self, project_id, job_id, profile_version, payload, model, usage):
+        from .seed_keywords import SeedKeywords, validate_seed_keywords
+
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = db.execute("SELECT status,kind,options FROM jobs WHERE project_id=? AND id=?", (project_id, job_id)).fetchone()
+            if not job or job["status"] != "running" or job["kind"] != "seed_keywords":
+                raise ValueError("基础词任务已取消或不存在，结果未保存")
+            if json.loads(job["options"]).get("profile_version") != profile_version:
+                raise ValueError("基础词任务的业务理解版本不匹配")
+            profile = db.execute("SELECT version,payload FROM profiles WHERE project_id=? ORDER BY version DESC LIMIT 1", (project_id,)).fetchone()
+            if not profile or profile["version"] != profile_version:
+                raise ValueError("业务理解已有新版本，请刷新后重新提取基础词")
+            validate_seed_keywords(SeedKeywords.model_validate(payload), {"payload": json.loads(profile["payload"])})
+            db.execute("INSERT INTO seed_keyword_runs VALUES (?,?,?,?,?,?)", (uid(), project_id, job_id, profile_version, encode(payload), now()))
+            db.execute("INSERT INTO model_runs VALUES (?,?,?,?,?,?)", (uid(), project_id, job_id, model, encode(usage), now()))
+            self.event(db, project_id, "seed_keywords_extracted", {"job_id": job_id, "profile_version": profile_version, "keywords": len(payload["keywords"])})
 
     def sources(self, project_id):
         self.project(project_id)

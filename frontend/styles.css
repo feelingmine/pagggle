@@ -182,6 +182,14 @@ td:first-child { min-width: 220px; }
   .table-scroll td::before { content: attr(data-label); display: block; color: var(--muted); font-size: 12px; }
 }
 .data-note { margin-top: 20px; color: var(--muted); font-size: 13px; }
+.seed-keywords .page-actions { margin: 16px 0; }
+.seed-kind { margin-top: 24px; }
+.seed-kind h3 { font-size: 15px; font-weight: 600; }
+.seed-term { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.seed-term > div { min-width: 0; }
+.seed-term p { color: var(--muted); font-size: 12px; margin: 5px 0 0; }
+.seed-word { text-align: left; overflow-wrap: anywhere; }
+.seed-term > button { flex-shrink: 0; font-size: 12px; }
 .cluster-toolbar { display: flex; align-items: center; gap: 28px; margin: 28px 0 12px; flex-wrap: wrap; }
 .cluster-toolbar .field { margin-bottom: 0; }
 .cluster-toolbar p,.cluster-method,.intake-schema { font-size: 14px; color: var(--muted); line-height: 1.8; }

@@ -14,6 +14,7 @@ from .clustering import cluster_keywords
 from .crawl import CrawlError, crawl_site, normalize_url
 from .intake import import_records
 from .intents import generate_intents
+from .seed_keywords import generate_seed_keywords, seed_facts
 from .store import Store, encode, now, uid
 from .understanding import Understanding, generate_understanding, validate_evidence
 
@@ -29,7 +30,8 @@ class SourceInput(BaseModel):
 
 
 class JobInput(BaseModel):
-    kind: Literal["discover", "crawl", "understand", "analyze", "intents", "clusters"]
+    kind: Literal["discover", "crawl", "understand", "analyze", "intents", "clusters", "seed_keywords"]
+    profile_version: int | None = Field(default=None, ge=1)
     crawl_max_pages: int | None = Field(default=None, ge=1, strict=True)
     source_ids: list[str] | None = None
     demand_ids: list[str] | None = None
@@ -123,6 +125,16 @@ def create_app(settings=None, store=None):
         if store.cancelled(project_id, job_id):
             return
         try:
+            if kind == "seed_keywords":
+                profile = store.profiles(project_id)[0]
+                if profile["version"] != expected_version:
+                    raise ValueError("业务理解已有新版本，请刷新后重新提取基础词")
+                store.update_job(project_id, job_id, progress="从已有产品与服务依据中提取行业基础词")
+                payload, usage = generate_seed_keywords(job_settings, profile, store.sources(project_id), store.project(project_id)["site_url"],
+                    cancelled=lambda: store.cancelled(project_id, job_id))
+                store.save_seed_keywords(project_id, job_id, expected_version, payload, settings.model, usage)
+                store.update_job(project_id, job_id, status="succeeded", progress=f"已提取 {len(payload['keywords'])} 个搜索基础词，请核对分类与依据")
+                return
             if kind == "clusters":
                 payload = cluster_keywords(job_settings, keyword_records,
                     cancelled=lambda: store.cancelled(project_id, job_id),
@@ -220,6 +232,11 @@ def create_app(settings=None, store=None):
         # Old clients may still send analyze; discovery must never auto-read content.
         kind = "discover" if data.kind == "analyze" else data.kind
         keyword_records = None
+        if kind == "seed_keywords":
+            if not profiles or not seed_facts(profiles[0]):
+                raise ValueError("请先生成并核对产品与服务的业务理解")
+            if data.profile_version != profiles[0]["version"]:
+                raise ValueError("业务理解已有新版本，请刷新后再提取基础词")
         if data.demand_ids is not None and kind != "clusters":
             raise ValueError("关键词选择仅用于聚类任务")
         if kind == "clusters":
@@ -254,6 +271,8 @@ def create_app(settings=None, store=None):
         if kind == "understand" and selected_sources is not None and any(s["status"] != "read" or s["kind"] == "discovery" for s in selected_sources):
             raise ValueError("请选择已成功读取的正文资料")
         options = {"crawl_max_pages": limit} if kind in {"discover", "crawl"} else {}
+        if kind == "seed_keywords":
+            options = {"profile_version": profiles[0]["version"]}
         if kind == "clusters":
             options = {"demand_ids": [r["id"] for r in keyword_records], "clustering_model": settings.clustering_model,
                 "clustering_distance_threshold": settings.clustering_distance_threshold, "clustering_serp_threshold": settings.clustering_serp_threshold}

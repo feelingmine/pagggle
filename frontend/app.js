@@ -35,6 +35,7 @@ async function refresh(){
   clearTimeout(state.poll);if(!state.id){render();return;}const id=state.id,generation=++state.generation;
   const data=await api(`/projects/${id}`);if(id!==state.id||generation!==state.generation)return;state.data=data;
   if(["demands","clusters","intake"].includes(state.view)){const [rows,intents,clusters]=await Promise.all([api(`/projects/${id}/demands`),data.keyword_onboarding?api(`/projects/${id}/intents`):[],api(`/projects/${id}/clusters`)]);if(id!==state.id||generation!==state.generation)return;state.demands=rows;state.intents=intents;if(clusters)state.clusterData=clusters;}
+  if(state.view==="planning"){await loadPlanning(id);if(id!==state.id||generation!==state.generation)return;}
   if(!state.reviewDirty&&!(state.view==="start"&&state.startDirty)&&!state.starting&&!$("#modal").open){rememberIntake();render();}if(activeJob())state.poll=setTimeout(()=>refresh().catch(e=>notify(e.message)),1800);
 }
 function render(){
@@ -44,11 +45,12 @@ function render(){
     if(["intake","clusters"].includes(state.view)){state.intakeKind="keyword";window.history.replaceState(null,"",`#${state.view}`);}
   }
   $("#demand-nav").textContent=initialKeywordJourney()?"关键词分析":"内容需求";
-  document.title=`pagggle · ${{start:"网站优化",analysis:"执行进度",selection:"筛选页面",understanding:"业务理解",sources:"资料与页面",demands:"内容需求",clusters:"关键词分析",intake:initialKeywordJourney()?"导入关键词":"添加内容需求"}[state.view]||"业务理解"}`;
+  document.title=`pagggle · ${{planning:"内容规划",start:"网站优化",analysis:"执行进度",selection:"筛选页面",understanding:"业务理解",sources:"资料与页面",demands:"内容需求",clusters:"关键词分析",intake:initialKeywordJourney()?"导入关键词":"添加内容需求"}[state.view]||"业务理解"}`;
   $("#demand-nav").setAttribute("aria-current",["demands","intake","clusters"].includes(state.view)?"page":"false");
   $("#start-nav").setAttribute("aria-current",["start","analysis","selection"].includes(state.view)?"page":"false");
+  $("#planning-nav").setAttribute("aria-current",state.view==="planning"?"page":"false");
   if(state.view==="start"||!state.id){renderOnboarding();return;}if(!state.data)return;
-  if(state.view==="selection")renderSelection();else if(state.view==="analysis")renderAnalysis();else if(state.view==="sources")renderSources();else if(state.view==="demands")renderDemands();else if(state.view==="clusters")renderClusters();else if(state.view==="intake")renderIntake();else if(!latest())renderAnalysis();else renderUnderstanding();
+  if(state.view==="planning")renderPlanning();else if(state.view==="selection")renderSelection();else if(state.view==="analysis")renderAnalysis();else if(state.view==="sources")renderSources();else if(state.view==="demands")renderDemands();else if(state.view==="clusters")renderClusters();else if(state.view==="intake")renderIntake();else if(!latest())renderAnalysis();else renderUnderstanding();
 }
 function renderOnboarding(){
   const draft=state.startDraft||{site_url:state.data?.project.site_url||"",name:"",limit_mode:"unlimited",crawl_max_pages:""};
@@ -450,8 +452,8 @@ function finishReview(){if(state.reviewDirty){notify("请先保存右侧正在�
 function showHistory(){modal("业务理解版本",state.data.profiles.map(p=>`<div class="history-entry"><div><strong>v${p.version} · ${p.status==="confirmed"?"版本已核对":"待核对"}</strong><p>${esc(p.reason)}<br>${formatTime(p.updated_at)}</p></div><button type="button" data-action="view-version" data-version="${p.version}">查看</button></div>`).join(""),null);}
 function projectMenu(){modal("项目与设置",`<p>${esc(state.data?.project.name||"尚未接入网站")}</p><p class="form-help">${esc(state.data?.project.site_url||"")}</p><div class="source-row"><button type="button" data-action="new-project">接入另一个网站</button></div>${latest()?'<div class="source-row"><button type="button" data-action="regenerate">重新分析业务理解</button><p class="form-help">生成新的画像版本，旧版本保留。完成后需要重新核对。</p></div>':""}<p class="form-help">模型配置仅保留在本地服务端。当前为单机工作区。</p>`,null);}
 function navigate(view){if(state.reviewDirty){notify("请先保存当前核对内容，或撤销本次选择。");return;}rememberIntake();if(location.hash===`#${view}`){route().catch(e=>notify(e.message));}else location.hash=view;}
-async function route(){if(state.starting){window.history.replaceState(null,"","#start");notify("正在发起分析，请稍候。");return;}const view=location.hash.slice(1)||"start";if(!["start","analysis","selection","understanding","sources","demands","intake","clusters"].includes(view))return;if(state.reviewDirty){window.history.replaceState(null,"",`#${state.view}`);notify("请先保存当前核对内容，或撤销本次选择。");return;}rememberIntake();state.view=view;
-  if(["demands","clusters","intake"].includes(view)&&state.id)await refresh();else render();window.scrollTo(0,0);}
+async function route(){if(state.starting){window.history.replaceState(null,"","#start");notify("正在发起分析，请稍候。");return;}const view=location.hash.slice(1)||"start";if(!["start","analysis","selection","understanding","sources","demands","intake","clusters","planning"].includes(view))return;if(state.reviewDirty){window.history.replaceState(null,"",`#${state.view}`);notify("请先保存当前核对内容，或撤销本次选择。");return;}rememberIntake();state.view=view;
+  if(["demands","clusters","intake","planning"].includes(view)&&state.id)await refresh();else render();window.scrollTo(0,0);}
 
 
 document.addEventListener("click",async event=>{
@@ -494,5 +496,5 @@ $("#modal").addEventListener("cancel",event=>{event.preventDefault();closeModal(
 $("#project-select").onchange=async event=>{rememberIntake();if(state.reviewDirty||state.modalDirty||state.intakeText||state.startDirty||state.starting||(initialKeywordJourney()&&state.selectedGroupIds.size)){event.target.value=state.id;notify("请先保存当前修改、完成导入或清空未保存的筛选，再切换项目。");return;}state.id=event.target.value;state.data=null;state.historyVersion=null;state.selectedFact=null;state.preview=null;state.pendingImport=null;state.intakeText="";state.intakeMarket="";state.intakeLanguage="en";state.showOriginal=false;state.demands=[];state.demandPages={};state.demandPageSize=10;state.intents=[];state.clusterData=null;state.clusterVersion=null;state.clusterQuery="";state.clusterStatus="";state.selectedGroupIds.clear();state.selectionRun=null;state.skipGroups=false;state.intakeKind="keyword";state.intakeFileName="";state.selectedPageIds.clear();state.selectionLimit=undefined;state.pageQuery="";state.sitemapFilter="";state.startDraft=null;state.startDirty=false;$("#main").innerHTML='<div class="initial-loading">正在切换项目…</div>';localStorage.setItem("pagggle-project",state.id);notify();try{await refresh();if(state.view==="demands")await route();}catch(error){notify(error.message);}};
 window.addEventListener("hashchange",()=>route().catch(error=>notify(error.message)));
 window.addEventListener("beforeunload",event=>{rememberIntake();if(state.reviewDirty||state.modalDirty||state.intakeText||state.startDirty||(initialKeywordJourney()&&state.selectedGroupIds.size)){event.preventDefault();event.returnValue="";}});
-state.view=["start","analysis","selection","understanding","sources","demands","intake","clusters"].includes(location.hash.slice(1))?location.hash.slice(1):"start";
+state.view=["start","analysis","selection","understanding","sources","demands","intake","clusters","planning"].includes(location.hash.slice(1))?location.hash.slice(1):"start";
 loadProjects(localStorage.getItem("pagggle-project")).catch(error=>notify(error.message));

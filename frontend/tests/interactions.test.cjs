@@ -8,7 +8,7 @@ function app() {
   const main = {innerHTML: ''}, handlers = {};
   const element = {setAttribute() {}, hidden: true, textContent: ''};
   const document = {
-    querySelector: key => key === '#main' ? main : ['#notice','#demand-nav','#start-nav'].includes(key) ? element : null,
+    querySelector: key => key === '#main' ? main : ['#notice','#demand-nav','#start-nav','#planning-nav'].includes(key) ? element : null,
     querySelectorAll: () => [],
     addEventListener: (name, handler) => {handlers[name] = handler;},
   };

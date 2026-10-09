@@ -242,3 +242,64 @@ dialog::backdrop { background: #1c253248; }
 .market-picker [role="option"] { padding: 9px 10px; cursor: pointer; border-radius: 3px; font-size: 14px; }
 .market-picker [role="option"] small { display: block; color: var(--muted); font-size: 12px; }
 .market-picker [role="option"]:hover,.market-picker [aria-selected="true"] { background: #fff3ed; }
+
+/* Content planning: a readable workflow, with evidence available at each decision. */
+.planning-workspace{max-width:1440px;margin:32px auto;padding:0 32px 60px}
+.plan-heading{display:flex;justify-content:space-between;gap:24px;align-items:center}
+.plan-heading h1{margin:10px 0}
+.plan-heading p{color:#667085}
+.plan-steps{display:flex;list-style:none;padding:0;margin:32px 0;gap:16px}
+.plan-steps li{flex:1;border-top:3px solid #e8ebee;padding:16px 0;color:#89919c;font-size:14px}
+.plan-steps li.complete{border-color:#e96734;color:#25303e}
+.plan-steps li span{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:1px solid #d9dfe4;border-radius:50%;margin-right:8px}
+.plan-card{background:#fff;border:1px solid #e3e7eb;border-radius:14px;padding:24px;margin:20px 0}
+.plan-card summary{cursor:pointer;font-weight:600}
+.plan-card summary span{font-weight:400;color:#76808d;margin-left:16px}
+.plan-input-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:40px;margin-top:16px}
+.plan-file{display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid #edf0f3;overflow-wrap:anywhere}
+.plan-file input{width:auto;margin-top:4px}
+.plan-file small,.plan-table small{display:block;color:#76808d;font-size:12px;margin-top:6px}
+.plan-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}
+.plan-toolbar label{display:flex;align-items:center;gap:8px}
+.plan-toolbar select{width:auto}
+.plan-toolbar input[type=search]{max-width:250px;margin-left:auto}
+.plan-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:28px}
+.plan-stats>div{padding:22px;border:1px solid #e3e7eb;border-radius:12px;background:white}
+.plan-stats strong{display:block;font-size:28px;letter-spacing:-1px}
+.plan-stats span{display:block;font-size:13px;color:#667085;margin-top:8px}
+.plan-context{color:#667085;font-size:13px;margin:16px 0}
+.plan-filters{display:flex;flex-wrap:wrap;gap:6px}
+.plan-filters button{border:0;background:#f5f6f8;padding:9px 12px;font-size:13px}
+.plan-filters button.selected{background:#fff0e9;color:#b74723}
+.plan-table{width:100%;border-collapse:collapse;font-size:13px}
+.plan-table th{text-align:left;white-space:nowrap;font-size:12px;color:#6a7482;background:#fafbfc;padding:12px}
+.plan-table td{padding:16px 12px;border-top:1px solid #eceff2;vertical-align:top;overflow-wrap:anywhere}
+.plan-table td:first-child{min-width:210px}
+.plan-table td:last-child{max-width:460px;min-width:240px;line-height:1.7}
+.plan-topic{text-align:left;font-weight:600;padding:0;font-size:14px}
+.plan-action{display:inline-block;border-radius:5px;background:#f2f4f7;color:#5f6874;padding:4px 8px;font-size:12px;white-space:nowrap}
+.plan-action.optimize{background:#fff1e8;color:#a64c20}
+.plan-action.keep{background:#eaf6ee;color:#307349}
+.plan-action.new{background:#eaf1fc;color:#3763a3}
+.plan-evidence{padding:16px 0;border-bottom:1px solid #eceff2;line-height:1.75}
+.plan-evidence blockquote{margin:10px 0;padding:10px 16px;border-left:3px solid #dce3e8;background:#fafbfc;color:#566271;font-size:13px}
+.plan-detail p{overflow-wrap:anywhere}
+.plan-detail h3{margin-top:28px}
+.plan-hash{font:12px/2 monospace;overflow-wrap:anywhere;color:#75808c}
+.plan-expansions{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:20px}
+.plan-expansions>div{padding:12px;background:#fafbfc}
+.plan-expansions span{display:block;color:#77828f;font-size:12px;margin-top:6px}
+.plan-progress{text-align:center;padding:40px}
+.plan-pulse{display:inline-block;width:12px;height:12px;background:#e96734;border-radius:50%;animation:planPulse 1.5s infinite}
+@keyframes planPulse{50%{opacity:.35}}
+@media(max-width:800px){.planning-workspace{padding:0 16px 40px}
+.plan-heading{align-items:flex-start}
+.plan-input-grid{grid-template-columns:1fr;gap:12px}
+.plan-steps{gap:8px;overflow:auto}
+.plan-steps li{min-width:110px}
+.plan-stats{grid-template-columns:repeat(2,1fr)}
+.plan-card{padding:16px}
+.plan-expansions{grid-template-columns:1fr}
+.plan-toolbar input[type=search]{margin-left:0;max-width:none}
+.plan-heading h1{font-size:28px}}
+@media(prefers-reduced-motion:reduce){.plan-pulse{animation:none}}

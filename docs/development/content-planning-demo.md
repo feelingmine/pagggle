@@ -21,3 +21,19 @@ v9 仅新增 `content_runs` / `content_assets`。五阶段运行复用既有项�
 规则 v3 修正：URL 中的客户任务优先于标题营销词；一般制造服务不误匹配厨房产品页；短标题不算完整回答；优化建议按规格/材料/采购/询盘分别提供。竞品始终标为参考，不能当本站能力。
 
 验证：真实数据专项 6 passed（全量对账、规则重放、实际 HTML 解析、页面匹配、HTTP 项目隔离/导出/分页/无网络重放、取消及重复任务）；采集回归 31 passed；既有后端 98 passed，16 项需要私有资料的测试默认跳过。私有副本测试前后来源、画像、基础词和首次筛选状态一致。
+
+
+## Step 3：真实浏览器与最终结果
+
+原项目 8000 的“内容规划”页面发起完整运行。v3 原运行 `44c7bca57fab40ffa61bae2e0b3e4645`，界面重放 `9e301b5d12cd4a1483ed66059d65b196`，均成功：
+
+- 输入 SHA-256：`134499ef1830bd3ed2af588da4cbbbdec1bad99ac0a3bd70bed112eedb66f03a`
+- 结果 SHA-256：`4df96f0e5c9355ed6c6ae45bbd43764595e93910277b1181bcfca6d9c4cd8b4a`
+- 133 主题：12 保留、12 优化、48 新增候选、61 待核对。25,993 词入主题，30,464 词保留待归类原因。
+- 本站 26/388 页已读；三个竞品 6/6 选定页已读。本站 sanitize-silicone-teethers 补读仍被真实验证/跳转页拦截；不得据此判断没有原有内容。
+
+Chrome：网页按钮发起、阶段进度、主题详情及原文、优化建议、10/50/100 行明细、无编辑关闭、刷新恢复、按快照重放；390px 页面 scrollWidth=390，表格转卡片保留字段标签。既有前端 5 项与 JS 语法通过。控制台仅一条资源 404，未发现 JavaScript 异常。完整结果导出的内容和项目隔离由 HTTP 测试验证。
+
+原库与 `data/backups/before-content-plan-20261009T170058.sqlite3` 比较，projects、sources、profiles、seed_keyword_runs、seed_keyword_revisions、demands、intake_batches、cluster_runs、keyword_onboarding 的内容哈希全相同；完整性 ok、外键无错误。测试报告/快照/HTML/备份均位于忽略的 data/，不入公开 Git。
+
+边界：这是硅胶行业的确定性规则 Demo，不是通用语义聚类或自动发布系统。大量词仍需人工归类/业务核对；正文覆盖规则只能支持可复核初筛。竞品研究覆盖选定页面，未读取全站；新增候选需继续检查 SERP 与全文相似内容。

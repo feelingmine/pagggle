@@ -83,12 +83,15 @@ def cluster_keywords(settings, records, *, cancelled=lambda: False, progress=lam
         for record in silo:
             contexts[tuple(record.get(k) for k in CONTEXT_FIELDS)].append(record)
         for members in contexts.values():
-            pages = []
+            pages, unverified = [], []
             for record in members:
                 if cancelled():
                     raise ValueError("聚类已取消")
                 progress(f"阶段 2/2：核对组内 SERP，已生成 {len(groups)} 个候选组")
                 serp = set(record.get("serp") or [])
+                if len(serp) < threshold or any(not record.get(k) for k in CONTEXT_FIELDS):
+                    unverified.append(record)
+                    continue
                 matched = None
                 for page in pages:
                     comparisons += 1
@@ -96,14 +99,17 @@ def cluster_keywords(settings, records, *, cancelled=lambda: False, progress=lam
                         matched = page
                         break
                 if matched is None:
-                    matched = {"members": [], "pool": set()}
+                    matched = {"members": [], "pool": set(), "basis": "serp_overlap"}
                     pages.append(matched)
                 matched["members"].append(record)
                 matched["pool"].update(serp)
+            # Missing evidence cannot undo a semantic group or bridge SERP groups.
+            if unverified:
+                pages.append({"members": unverified, "basis": "semantic_only"})
             for page in pages:
                 ordered = sorted(page["members"], key=rank_key)
                 pair_evidence, chain = [], False
-                for i, left in enumerate(ordered):
+                for i, left in enumerate(ordered if page["basis"] == "serp_overlap" else []):
                     if cancelled():
                         raise ValueError("聚类已取消")
                     for right in ordered[i + 1:]:
@@ -114,7 +120,7 @@ def cluster_keywords(settings, records, *, cancelled=lambda: False, progress=lam
                 missing = [r["id"] for r in ordered if not r.get("serp") or len(r["serp"]) < threshold or any(not r.get(k) for k in CONTEXT_FIELDS)]
                 reasons = []
                 if missing:
-                    reasons.append("SERP 缺失、结果不足或市场/语言/来源/日期/设备不完整；不能据此确认同页或分开建页")
+                    reasons.append("按关键词语义保留主题分组；SERP 缺失、结果不足或上下文不完整，同页关系待验证，不能据此确认合并或分开建页")
                 if chain:
                     reasons.append("并集匹配产生链式关联：并非每对成员都有足够重合，必须人工审核，不能直接合成一页")
                     chain_count += 1
@@ -123,6 +129,7 @@ def cluster_keywords(settings, records, *, cancelled=lambda: False, progress=lam
                 groups.append({
                     "semantic_silo_id": silo_id,
                     "target_page_id": stable_id("candidate_", [r["id"] for r in ordered]),
+                    "basis": page["basis"],
                     "status": "needs_evidence" if missing else "needs_review",
                     "chain_overlap": chain, "reasons": reasons, "pair_evidence": pair_evidence,
                     "context": {k: ordered[0].get(k) for k in CONTEXT_FIELDS},

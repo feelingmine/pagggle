@@ -52,9 +52,14 @@ def test_pooled_serp_bridge_is_not_approved_and_input_order_is_stable():
 def test_missing_serp_unknown_metrics_and_distinct_snapshot_contexts():
     rows = [record('a', None, None, None), record('b', None, 0, 0)]
     result = run(rows)
-    assert len(result['groups']) == 2
+    assert len(result['groups']) == 1
+    assert result['summary']['serp_comparisons'] == 0
     assert all(g['status'] == 'needs_evidence' for g in result['groups'])
-    assert next(g for g in result['groups'] if g['members'][0]['keyword'] == 'a')['members'][0]['volume'] is None
+    group = result['groups'][0]
+    assert group['basis'] == 'semantic_only'
+    assert group['pair_evidence'] == [] and not group['chain_overlap']
+    assert group['primary_provisional']
+    assert next(m for m in group['members'] if m['keyword'] == 'a')['volume'] is None
     a, b = record('a', ['x', 'y']), record('b', ['x', 'y'])
     for key, value in [('market', 'DE'), ('language', 'de'), ('serp_date', '2026-10-09'), ('device', 'mobile'), ('serp_source', 'different')]:
         b = dict(a, id='b', original='b', normalized='b', **{key: value})

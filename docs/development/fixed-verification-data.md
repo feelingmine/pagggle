@@ -30,3 +30,9 @@
 5. Chrome 打开 `http://127.0.0.1:8000/#clusters`，确认选中原网站项目，显示 4,869 条有效、0 条重复、0 条失败。展开导入对账后，表格实际渲染 10 行，显示第 1/487 页，可选 10/50/100 行；控制台无 error/warn。没有点击“分析全部关键词”。
 
 本地核验摘要保存在忽略的 `data/verification/fixed-dataset-manifest.json`，导入前哈希在 `fixed-dataset-before.json`。这些是验证记录，不是应用配置；`config.json` 未修改。本次没有产品代码变更，没有新增或修改合成测试数据。
+
+## 后续聚类修复验证（2026-10-09）
+
+用户反馈 4,869 个词产生 4,869 个组后，修复缺失 SERP 导致逐词拆组的问题，并仅对原项目关键词重跑聚类，追加 v2；网站未重新分析。v1 保留，v2 全量覆盖 4,869 个词，形成 579 个语义组（357 个多词组、222 个单词组），同页关系均待验证。本机 `config.json` 的语义距离阈值从 0.65 调整到 0.30，其它配置不变。
+
+复验命令：`PAGGGLE_VERIFY_FIXED_DATA=1 PYTHONPATH=backend .venv/bin/pytest backend/tests/test_fixed_keyword_clustering.py -q`。该用例读取原 XLSX 并核对哈希，运行实际本地模型，不创建项目、不写数据库、不修改输入文件；公开仓库缺少私有文件和本地模型时默认跳过，不用伪造数据替代。具体对比与边界见 progress.md 的“缺失搜索证据时保留语义分组”。

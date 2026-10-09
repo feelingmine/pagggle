@@ -213,6 +213,27 @@ def assessment_inputs(context, target, budget):
     return [make_context(body) for body in split_body(target['body'],make_context,budget)]
 
 
+def validate_assessment(value, target):
+    for index,req in enumerate(value.requirements):
+        field=f'requirements[{index}]'
+        if req.covered and not req.quote:
+            raise ValueError(f'{field}.covered=true 但 quote 为空；必须有目标页原文依据，否则 covered=false 并给出具体建议')
+        if req.quote:
+            if not target:
+                raise ValueError(f'{field}.quote 无有效来源：target_full_text=null，所有 requirements[].quote 必须为 null、covered=false。'
+                    '竞品或其它网页的引用不能当作目标页依据')
+            try:
+                req.quote=original_quote(target['body'],req.quote)
+            except ValueError:
+                raise ValueError(f'{field}.quote 不存在于 target_full_text.body：'+json.dumps(req.quote,ensure_ascii=False)+
+                    '。只可从目标页正文逐字复制，不能引用 competitor_evidence 或其它网页。'
+                    '若目标正文无法支持本项，改为 covered=false、quote=null，并说明缺口和具体建议') from None
+        if not req.covered and not req.suggestion:
+            raise ValueError(f'{field}.suggestion 为空：缺口必须有具体建议')
+    if value.customer_impact.score is not None or value.resources.score is not None:
+        raise ValueError('没有客户研究或资源预算，customer_impact.score 和 resources.score 必须为 null，reason 说明缺少哪些资料')
+
+
 def assess_target(execution, settings, context, target, instruction, validate):
     inputs=assessment_inputs(context,target,settings.model_input_chars)
     if len(inputs)==1 and 'partial_target' not in inputs[0]:
@@ -511,18 +532,6 @@ def execute_strategy(snapshot, execution, settings, checkpoint):
         target=page_ids.get(match['target_page'])
         full_target={'url':target['url'],'title':target['title'],'body':target['body']} if target else None
         competitors=[{'url':p['url'],**cards[i]} for i,p in page_ids.items() if p['url'] not in own_urls]
-        def validate_assessment(value):
-            for req in value.requirements:
-                if req.covered and not req.quote:
-                    raise ValueError('已覆盖项没有原文依据')
-                if req.quote:
-                    if not target:
-                        raise ValueError('没有目标页，不能生成原文引用')
-                    req.quote=original_quote(target['body'],req.quote)
-                if not req.covered and not req.suggestion:
-                    raise ValueError('缺口没有具体建议')
-            if value.customer_impact.score is not None or value.resources.score is not None:
-                raise ValueError('没有客户研究或资源预算，不得伪造量化评分')
         assessed=assess_target(execution,settings,{'business':context,'topic':topic_context,'match':match,
             'competitor_evidence':competitors},full_target,
             '执行 content-strategy 的价值/优先级评估和 seo-audit 的内容深度审核。围绕本主题的真实买家问题生成检查项，禁止所有产品套同一列表。'
@@ -531,7 +540,7 @@ def execute_strategy(snapshot, execution, settings, checkpoint):
             '没有目标页时所有 covered=false，给出针对该主题的原创大纲模块，不编造企业能力、参数、认证或医疗建议。'
             '竞品引用只用于结构与角度参考，不是本站事实或排名证据。优先解释 B2B 价值、目标受众和是否值得制作。'
             '四维评分中 customer_impact/resources 没有实测资料，score 必须 null 并解释缺什么；fit/search 可基于本轮数据推断并说明。'
-            '未知业务事实列 unknowns；cta 应符合本主题下一步，不重复通用模板。',validate_assessment)
+            '未知业务事实列 unknowns；cta 应符合本主题下一步，不重复通用模板。',lambda value:validate_assessment(value,target))
         return {'topic':topic,'match':match,'assessment':assessed}
     decisions=parallel(topics,review,settings.strategy_concurrency,checkpoint,'4/5 skill 匹配全文与内容决策')
     snapshot['strategy']={'version':VERSION,'skills':execution.skills,'catalog':catalog,'page_cards':list(cards.values()),

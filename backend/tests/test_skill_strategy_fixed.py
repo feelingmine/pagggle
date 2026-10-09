@@ -416,3 +416,21 @@ def test_stricter_repair_rejects_cached_output_and_requests_correction(monkeypat
         engine.call('topic_consolidation',context,Merges,instruction,stricter)
     assert len(requests)==1 and saved[0]['status']=='failed'
     assert json.loads(requests[0]['messages'][1]['content'])==context
+
+
+def test_actual_assessment_failures_identify_fields_and_reject_other_page_quotes():
+    from pagggle.skill_strategy import Assessment, validate_assessment
+    with sqlite3.connect(f"file:{ROOT/'data/pagggle.sqlite3'}?mode=ro",uri=True) as db:
+        rows=db.execute("SELECT payload FROM content_skill_calls WHERE project_id=? AND run_id=? AND stage='content_assessment' AND json_extract(payload,'$.status')='failed'",
+            (PID,'63a5cba56b1d4a6aace8a9c4a2b0e52d')).fetchall()
+    if not rows:pytest.skip('Requires actual assessment responses with wrong-page quotes')
+    has_target=[]
+    for row in rows:
+        record=json.loads(row[0]);context=json.loads(record['request']['messages'][1]['content'])
+        value=Assessment.model_validate_json(record['attempts'][-1]['content'])
+        target=context['target_full_text'];has_target.append(bool(target))
+        with pytest.raises(ValueError) as error:validate_assessment(value,target)
+        assert 'requirements[' in str(error.value) and '.quote' in str(error.value)
+        assert 'null' in str(error.value) and 'covered=false' in str(error.value)
+        if target:assert 'competitor_evidence' in str(error.value)
+    assert set(has_target)=={True,False}
